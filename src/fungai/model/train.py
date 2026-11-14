@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import re
 from pathlib import Path
 
 import torch
@@ -25,7 +26,24 @@ from fungai.tracking.mlflow_utils import (
 
 logger = logging.getLogger("fungai.train")
 
-CHECKPOINT_DIR = Path("outputs/checkpoints")
+OUTPUTS_DIR = Path("outputs")
+
+
+def _next_version(experiment_name: str) -> str:
+    """Return the next unused version string like 'experiment_v0.3'."""
+    OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+    prefix = f"{experiment_name}_v0."
+    pattern = re.compile(re.escape(prefix) + r"(\d+)$")
+    used: set[int] = set()
+    for d in OUTPUTS_DIR.iterdir():
+        if d.is_dir():
+            m = pattern.match(d.name)
+            if m:
+                used.add(int(m.group(1)))
+    counter = 1
+    while counter in used:
+        counter += 1
+    return f"{experiment_name}_v0.{counter}"
 
 
 def _fungi_collate(batch: list[dict]) -> dict:
@@ -238,16 +256,26 @@ def train(
     if config.safety.preflight_enabled:
         watchdog = run_preflight(config, model, train_loader, optimizer, criterion, device)
 
-    CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
-    best_path = CHECKPOINT_DIR / "best.pth"
-    last_path = CHECKPOINT_DIR / "last.pth"
+    version_name = _next_version(config.experiment_name)
+    run_dir = OUTPUTS_DIR / version_name
+    run_dir.mkdir(parents=True, exist_ok=True)
+    best_path = run_dir / "best.pth"
+    last_path = run_dir / "last.pth"
+
+    import yaml as _yaml
+    from fungai.config import config_to_flat_dict as _flat
+    (run_dir / "config.yaml").write_text(
+        _yaml.dump(_flat(config), default_flow_style=False)
+    )
+
+    print(f"Run: {version_name}  →  {run_dir}", flush=True)
 
     eval_config = {
         "aggregate_observations": config.evaluation.aggregate_observations,
         "failure_gallery_n": config.evaluation.failure_gallery_n,
     }
 
-    run = start_tracked_run(config)
+    run = start_tracked_run(config, run_name=version_name)
 
     try:
         for epoch in range(config.training.epochs):
@@ -306,6 +334,9 @@ def train(
             final_report = evaluate_model(
                 model, val_loader, device, species_map, toxicity_map,
                 species_to_genus, genus_names, train_species_counts, eval_config,
+            )
+            (run_dir / "eval_report.json").write_text(
+                json.dumps(final_report, indent=2, default=str)
             )
             log_evaluation_report(final_report)
             log_model_checkpoint(best_path)

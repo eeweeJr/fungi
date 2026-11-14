@@ -59,6 +59,7 @@ def start_tracked_run(config: ExperimentConfig, run_name: str | None = None):
         mlflow.log_param(k, str(v)[:500])
 
     mlflow.log_param("git_hash", get_git_hash())
+    mlflow.log_param("version", run_name)
 
     log_config_artifact(flat)
 
