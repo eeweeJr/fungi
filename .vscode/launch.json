@@ -1,0 +1,47 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Run App",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "fungai",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": true
+        },
+        {
+            "name": "Ingest Data",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "fungai.data.ingest",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": true
+        },
+        {
+            "name": "Validate Data",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "fungai.data.validate",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": true
+        },
+        {
+            "name": "Run Tests",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "args": ["tests/", "-v"],
+            "cwd": "${workspaceFolder}",
+            "justMyCode": true
+        },
+        {
+            "name": "Debug Current Test File",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "args": ["${file}", "-v"],
+            "cwd": "${workspaceFolder}",
+            "justMyCode": true
+        }
+    ]
+}
