@@ -1,0 +1,12 @@
+model:
+  backbone: vit_base_patch16_224
+  pretrained: true
+
+training:
+  lr: 1e-4
+  epochs: 10
+  batch_size: 32
+
+data:
+  dataset: fungitastic
+  image_size: 224

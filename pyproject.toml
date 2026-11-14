@@ -1,0 +1,42 @@
+[project]
+name = "fungai"
+version = "0.1.0"
+description = "Mushroom identification AI"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "torch>=2.4",
+    "torchvision>=0.19",
+    "timm>=1.0",
+    "pillow>=10.0",
+    "pandas>=2.2",
+    "matplotlib>=3.9",
+    "mlflow>=2.16",
+    "pyyaml>=6.0",
+    "requests>=2.32",
+    "tqdm>=4.66",
+    "seaborn>=0.13",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.6",
+    "pytest>=8.0",
+    "ipykernel>=6.29",
+]
+
+[project.scripts]
+fungai = "fungai:main"
+
+[build-system]
+requires = ["uv_build>=0.13.7,<0.14.0"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[dependency-groups]
+dev = [
+    "nbclient>=0.11.0",
+]

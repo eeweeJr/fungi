@@ -1,0 +1,238 @@
+{
+  "subset": "mini",
+  "size": "300",
+  "run_at": "2026-11-13T18:07:18",
+  "results": [
+    {
+      "name": "file-metadata integrity [train]",
+      "status": "PASS",
+      "summary": "46842 rows; 0 missing files; 0 orphan files on disk",
+      "details": {
+        "missing_sample": [],
+        "orphans_sample": [],
+        "n_missing": 0,
+        "n_orphans": 0
+      }
+    },
+    {
+      "name": "image health [train]",
+      "status": "PASS",
+      "summary": "checked 2000 images; 0 corrupt/zero-byte; 0 quality flags (small/aspect)",
+      "details": {
+        "problems_sample": {},
+        "n_problems": 0
+      }
+    },
+    {
+      "name": "metadata sanity [train]",
+      "status": "PASS",
+      "summary": "46842 rows; issues: none",
+      "details": {
+        "issues": {
+          "bad_latitude": 0,
+          "bad_longitude": 0,
+          "zero_coords": 0,
+          "unparseable_dates": 0,
+          "dates_out_of_range": 0,
+          "month_mismatch": 0,
+          "bad_elevation": 0
+        },
+        "columns_with_>1%_nulls": {
+          "substrate": 0.0324,
+          "coorUncert": 0.0153
+        }
+      }
+    },
+    {
+      "name": "taxonomic consistency [train]",
+      "status": "PASS",
+      "summary": "210 species; hierarchy conflicts: 0; toxicity null rate: 0.0",
+      "details": {}
+    },
+    {
+      "name": "file-metadata integrity [val]",
+      "status": "PASS",
+      "summary": "9412 rows; 0 missing files; 38 orphan files on disk",
+      "details": {
+        "missing_sample": [],
+        "orphans_sample": [
+          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/val/300p/1-3970590431.JPG",
+          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/val/300p/0-3944337808.JPG",
+          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/val/300p/1-3964841512.JPG",
+          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/val/300p/1-3968584348.JPG",
+          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/val/300p/1-4100090434.JPG",
+          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/val/300p/10-3968584348.JPG",
+          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/val/300p/0-3922623496.JPG",
+          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/val/300p/0-3964841512.JPG",
+          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/val/300p/0-3865765311.JPG",
+          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/val/300p/2-4100088483.JPG"
+        ],
+        "n_missing": 0,
+        "n_orphans": 38
+      }
+    },
+    {
+      "name": "image health [val]",
+      "status": "PASS",
+      "summary": "checked 2000 images; 0 corrupt/zero-byte; 0 quality flags (small/aspect)",
+      "details": {
+        "problems_sample": {},
+        "n_problems": 0
+      }
+    },
+    {
+      "name": "metadata sanity [val]",
+      "status": "PASS",
+      "summary": "9412 rows; issues: none",
+      "details": {
+        "issues": {
+          "bad_latitude": 0,
+          "bad_longitude": 0,
+          "zero_coords": 0,
+          "unparseable_dates": 0,
+          "dates_out_of_range": 0,
+          "month_mismatch": 0
+        },
+        "columns_with_>1%_nulls": {}
+      }
+    },
+    {
+      "name": "taxonomic consistency [val]",
+      "status": "PASS",
+      "summary": "189 species; hierarchy conflicts: 0; toxicity null rate: 0.0",
+      "details": {}
+    },
+    {
+      "name": "file-metadata integrity [test]",
+      "status": "PASS",
+      "summary": "10738 rows; 0 missing files; 176 orphan files on disk",
+      "details": {
+        "missing_sample": [],
+        "orphans_sample": [
+          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/test/300p/0-4465900230.JPG",
+          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/test/300p/1-4465899925.JPG",
+          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/test/300p/1-4465898738.JPG",
+          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/test/300p/0-4169770608.JPG",
+          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/test/300p/1-4465899466.JPG",
+          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/test/300p/0-4465889981.JPG",
+          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/test/300p/2-4465863362.JPG",
+          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/test/300p/2-4465899925.JPG",
+          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/test/300p/1-4100102558.JPG",
+          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/test/300p/4-4465863026.JPG"
+        ],
+        "n_missing": 0,
+        "n_orphans": 176
+      }
+    },
+    {
+      "name": "image health [test]",
+      "status": "PASS",
+      "summary": "checked 2000 images; 0 corrupt/zero-byte; 1 quality flags (small/aspect)",
+      "details": {
+        "problems_sample": {
+          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/test/300p/0-4465880459.JPG": "small (300x90)"
+        },
+        "n_problems": 1
+      }
+    },
+    {
+      "name": "metadata sanity [test]",
+      "status": "PASS",
+      "summary": "10738 rows; issues: none",
+      "details": {
+        "issues": {
+          "bad_latitude": 0,
+          "bad_longitude": 0,
+          "zero_coords": 0,
+          "unparseable_dates": 0,
+          "dates_out_of_range": 0,
+          "month_mismatch": 0
+        },
+        "columns_with_>1%_nulls": {}
+      }
+    },
+    {
+      "name": "taxonomic consistency [test]",
+      "status": "PASS",
+      "summary": "191 species; hierarchy conflicts: 0; toxicity null rate: 0.0",
+      "details": {}
+    },
+    {
+      "name": "split hygiene",
+      "status": "PASS",
+      "summary": "observation overlap: none; unseen-class counts (open-set, informational): {'val_species_not_in_train': 0, 'test_species_not_in_train': 0}",
+      "details": {
+        "overlap": {},
+        "class_gap": {
+          "val_species_not_in_train": 0,
+          "test_species_not_in_train": 0
+        }
+      }
+    },
+    {
+      "name": "duplicate images",
+      "status": "PASS",
+      "summary": "hashed 6000 images; 1 exact-duplicate groups; 0 CROSS-SPLIT (leakage)",
+      "details": {
+        "cross_split_sample": {},
+        "n_within_split_groups": 1
+      }
+    },
+    {
+      "name": "mask alignment",
+      "status": "PASS",
+      "summary": "3 parquet files, 318458 part-masks; 17807 (5.6%) not joinable to loaded metadata",
+      "details": {
+        "FungiTastic-Mini-ValidationMasks.parquet": {
+          "rows": 40350,
+          "matched_by_filename": 39779,
+          "matched_by_observation_id": 0,
+          "unmatched": 571,
+          "part_labels": {
+            "cap": 12517,
+            "stem": 11216,
+            "fruiting_body": 8791,
+            "gills": 6254,
+            "ring": 896,
+            "pores": 608,
+            "unknown underside": 68
+          }
+        },
+        "FungiTastic-Mini-TrainMasks.parquet": {
+          "rows": 234012,
+          "matched_by_filename": 62614,
+          "matched_by_observation_id": 154715,
+          "unmatched": 16683,
+          "part_labels": {
+            "cap": 75122,
+            "stem": 67486,
+            "fruiting_body": 48010,
+            "gills": 36665,
+            "ring": 3997,
+            "pores": 2440,
+            "unknown underside": 280,
+            "ridges": 7,
+            "teeth": 3,
+            "microscopic": 2
+          }
+        },
+        "FungiTastic-Mini-TestMasks.parquet": {
+          "rows": 44096,
+          "matched_by_filename": 43543,
+          "matched_by_observation_id": 0,
+          "unmatched": 553,
+          "part_labels": {
+            "cap": 13375,
+            "stem": 12211,
+            "fruiting_body": 9885,
+            "gills": 6820,
+            "ring": 1246,
+            "pores": 489,
+            "unknown underside": 69,
+            "microscopic": 1
+          }
+        }
+      }
+    }
+  ]
+}

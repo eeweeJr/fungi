@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Data (too large for git)
+data/raw/
+data/processed/
+*.tar.gz
+*.zip
+
+# Model artifacts
+outputs/
+mlruns/
+*.ckpt
+*.pth
+
+# OS
+.DS_Store
+
+# IDE
+.vscode/settings.json
