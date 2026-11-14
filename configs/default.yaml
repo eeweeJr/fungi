@@ -1,12 +1,46 @@
-model:
-  backbone: vit_base_patch16_224
-  pretrained: true
+seed: 42
 
-training:
-  lr: 1e-4
-  epochs: 10
-  batch_size: 32
+experiment_name: "fungai-dev"
+run_name: null
+notes: ""
 
 data:
   dataset: fungitastic
+  subset: mini
+  size: "300"
   image_size: 224
+  batch_size: 32
+  num_workers: 0
+  pin_memory: false
+  augmentation: true
+
+model:
+  backbone: vit_base_patch16_224
+  pretrained: true
+  dropout: 0.1
+  num_classes: 210
+
+training:
+  lr: 1.0e-4
+  weight_decay: 0.01
+  epochs: 3
+  warmup_epochs: 1
+  scheduler: cosine
+  grad_clip_norm: 1.0
+  early_stopping_patience: 5
+  early_stopping_metric: val_macro_f1
+  cost_sensitive: false
+  label_smoothing: 0.0
+
+evaluation:
+  primary_metric: macro_f1
+  top_k: [1, 5]
+  ece_n_bins: 15
+  coverage_steps: 20
+  failure_gallery_n: 50
+  aggregate_observations: true
+
+safety:
+  memory_limit_gb: 16.0
+  memory_poll_interval_s: 2.0
+  preflight_enabled: true
