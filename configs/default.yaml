@@ -49,3 +49,7 @@ safety:
   memory_limit_gb: 16.0
   memory_poll_interval_s: 2.0
   preflight_enabled: true
+
+hub:
+  push_best_checkpoint: true   # true: upload best.pth to the private repo below after training
+  repo_id: eewee/fungai-checkpoints                 # e.g. your-username/fungai-checkpoints

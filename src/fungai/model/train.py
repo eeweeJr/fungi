@@ -224,6 +224,33 @@ def _build_train_species_counts(train_df, species_map: dict[str, int]) -> dict[i
     return counts
 
 
+def _push_best_checkpoint(run_dir: Path, config: ExperimentConfig, early_stopping: EarlyStopping,
+                          data_snapshot: Path | None) -> None:
+    """Upload best.pth to the Hub and tag the MLflow run with where it went. A failed
+    upload never fails the run: the checkpoint stays local and can be pushed later."""
+    import mlflow
+
+    from fungai.tracking.hub import build_run_info, log_checkpoint_location, push_best_checkpoint
+    from fungai.tracking.mlflow_utils import get_git_hash
+
+    run_info = build_run_info(
+        run_dir.name, mlflow.active_run().info.run_id, config.experiment_name, get_git_hash(),
+        Path(data_snapshot).name if data_snapshot else None,
+        best_epoch=early_stopping.best_epoch,
+        best_metric={early_stopping.metric_name: early_stopping.best_value},
+        backbone=config.model.backbone, num_classes=config.model.num_classes,
+    )
+    try:
+        record = push_best_checkpoint(run_dir, config.hub.repo_id, run_info)
+    except Exception as exc:  # noqa: BLE001 - network, auth, quota: report and carry on
+        logger.warning("checkpoint upload failed (%s); push it later with: "
+                       "python -m fungai.tracking.hub push %s", exc, run_dir)
+        mlflow.set_tag("checkpoint.status", "upload failed")
+        return
+    log_checkpoint_location(record)
+    print(f"Best checkpoint pushed: {record['url']}", flush=True)
+
+
 def train(
     model: nn.Module,
     train_loader: DataLoader,
@@ -359,8 +386,11 @@ def train(
             np.save(run_dir / "val_probs.npy", obs_probs)
             mlflow.log_artifact(str(run_dir / "val_predictions.parquet"), artifact_path="predictions")
             mlflow.log_artifact(str(run_dir / "val_probs.npy"), artifact_path="predictions")
-            log_model_checkpoint(best_path)
-            log_model_checkpoint(last_path)
+            if config.hub.push_best_checkpoint:
+                _push_best_checkpoint(run_dir, config, early_stopping, data_snapshot)
+            else:
+                log_model_checkpoint(best_path)
+                log_model_checkpoint(last_path)
 
     finally:
         mlflow.end_run()

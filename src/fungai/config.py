@@ -71,6 +71,13 @@ class SafetyConfig:
 
 
 @dataclass
+class HubConfig:
+    # upload best.pth (plus run metadata) to a private Hugging Face repo after training
+    push_best_checkpoint: bool = False
+    repo_id: str | None = None  # e.g. "your-username/fungai-checkpoints"
+
+
+@dataclass
 class ExperimentConfig:
     seed: int = 42
     experiment_name: str = "fungai-dev"
@@ -81,6 +88,7 @@ class ExperimentConfig:
     training: TrainingConfig = field(default_factory=TrainingConfig)
     evaluation: EvalConfig = field(default_factory=EvalConfig)
     safety: SafetyConfig = field(default_factory=SafetyConfig)
+    hub: HubConfig = field(default_factory=HubConfig)
 
 
 _SECTION_CLASSES = {
@@ -89,6 +97,7 @@ _SECTION_CLASSES = {
     "training": TrainingConfig,
     "evaluation": EvalConfig,
     "safety": SafetyConfig,
+    "hub": HubConfig,
 }
 
 
@@ -126,6 +135,8 @@ def _validate(cfg: ExperimentConfig) -> None:
         raise ValueError(
             f"sampler must be none, observation, sqrt or balanced, got {cfg.data.sampler}"
         )
+    if cfg.hub.push_best_checkpoint and not cfg.hub.repo_id:
+        raise ValueError("hub.push_best_checkpoint needs hub.repo_id (e.g. 'username/fungai-checkpoints')")
     if cfg.training.epochs < 1:
         raise ValueError(f"epochs must be >= 1, got {cfg.training.epochs}")
     if cfg.training.lr <= 0:
