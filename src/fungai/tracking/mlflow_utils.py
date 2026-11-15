@@ -92,6 +92,8 @@ def log_data_snapshot(snapshot_dir: Path) -> None:
             # MLflow registers its local-file source twice and warns that the path is
             # ambiguous between the two identical copies.
             warnings.filterwarnings("ignore", message="The specified dataset source can be")
+            # A model-serving hint about integer columns; it does not apply to a dataset record.
+            warnings.filterwarnings("ignore", message="Hint: Inferred schema contains integer")
             dataset = mlflow.data.from_pandas(
                 df, source=str(file.resolve()), name=f"{manifest['id']}/{split}",
                 digest=summary["digest"][:20],

@@ -81,6 +81,57 @@ def inconsistent_observations(df: pd.DataFrame) -> list:
     return n_species[n_species > 1].index.tolist()
 
 
+def mixed_known_unknown_observations(df: pd.DataFrame) -> list:
+    """Observations whose photos are partly known and partly held-out species."""
+    if "is_unknown" not in df.columns:
+        return []
+    n = df.groupby("observation_id")["is_unknown"].nunique()
+    return n[n > 1].index.tolist()
+
+
+def inconsistent_genus_observations(df: pd.DataFrame) -> list:
+    """Observations whose images disagree on genus."""
+    n = df.groupby("observation_id")["genus"].agg(lambda s: s.astype(str).nunique())
+    return n[n > 1].index.tolist()
+
+
+def observation_split_violations(protocol, dfs: dict[str, pd.DataFrame]) -> list[str]:
+    """Invariants an observation-level model relies on, over protocol-applied splits.
+
+    - no observation in more than one split
+    - every observation has one species and one genus
+    - no observation mixes known and held-out species
+    - every held-out species belongs to a genus the model knows
+    - no excluded file is still present
+    - the protocol's own checks (`protocol_violations`)
+    Empty list means the splits are safe to use per observation.
+    """
+    out: list[str] = []
+    for pair, ids in shared_values(dfs, "observation_id").items():
+        out.append(f"observations in more than one split ({pair}): {len(ids)}, e.g. {ids[:3]}")
+    known_genera = set(protocol.genus_names)
+    excluded = set(getattr(protocol, "excluded_files", []) or [])
+    for name, df in dfs.items():
+        for label, bad in (
+            ("more than one species", inconsistent_observations(df)),
+            ("more than one genus", inconsistent_genus_observations(df)),
+            ("mixed known and held-out species", mixed_known_unknown_observations(df)),
+        ):
+            if bad:
+                out.append(f"{name}: {len(bad)} observations with {label}, e.g. {bad[:3]}")
+        if "is_unknown" in df.columns:
+            unknown_genera = set(df.loc[df["is_unknown"], "genus"].astype(str)) - known_genera
+            if unknown_genera:
+                out.append(f"{name}: held-out species in genera the model does not know: "
+                           f"{sorted(unknown_genera)}")
+        if excluded and "filename" in df.columns:
+            still = set(df["filename"]) & excluded
+            if still:
+                out.append(f"{name}: {len(still)} excluded files still present")
+    out.extend(protocol_violations(protocol, dfs))
+    return out
+
+
 def protocol_violations(protocol, dfs: dict[str, pd.DataFrame]) -> list[str]:
     """Check protocol-applied splits: held-out species must never reach train, and
     each unknown group must appear only in its own eval split."""

@@ -164,3 +164,31 @@ def error_decomposition(
         "wrong_genus": float((~same_genus).mean()),
         "n_samples": n,
     }
+
+
+def bootstrap_ci(
+    stat_fn,
+    n_rows: int,
+    n_samples: int = 1000,
+    seed: int = 0,
+    alpha: float = 0.05,
+) -> dict:
+    """Percentile bootstrap interval for a statistic over rows (observations).
+
+    `stat_fn(idx)` computes the statistic on the rows at `idx` (an int array, with
+    repeats). For a paired comparison of two predictors on the same observations,
+    pass a function that returns their difference: every resample then uses the same
+    rows for both, which is what makes the interval paired.
+
+    Returns {"value", "lo", "hi", "n", "n_samples"}; value is stat_fn on all rows.
+    """
+    if n_rows == 0:
+        return {"value": None, "lo": None, "hi": None, "n": 0, "n_samples": n_samples}
+    rng = np.random.default_rng(seed)
+    full = float(stat_fn(np.arange(n_rows)))
+    draws = np.empty(n_samples)
+    for i in range(n_samples):
+        draws[i] = stat_fn(rng.integers(0, n_rows, size=n_rows))
+    lo, hi = np.quantile(draws, [alpha / 2, 1 - alpha / 2])
+    return {"value": full, "lo": float(lo), "hi": float(hi), "n": int(n_rows),
+            "n_samples": int(n_samples)}

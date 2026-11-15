@@ -93,13 +93,19 @@ def _git_state() -> dict:
 
 
 def _split_summary(df: pd.DataFrame) -> dict:
+    from fungai.data.observations import observation_summary
+
     obs = df.drop_duplicates("observation_id")
+    shape = observation_summary(df)
     return {
         "rows": len(df),
         "observations": len(obs),
         "species": int(df["species"].nunique()),
         "unknown_observations": int(obs["is_unknown"].sum()),
+        "known_observations": int(len(obs) - obs["is_unknown"].sum()),
         "revisited_observations": int(obs["revisited_site"].sum()),
+        "multi_photo_fraction": shape["multi_photo_fraction"],
+        "photos_per_observation_hist": shape["photos_per_observation_hist"],
         "digest": frame_digest(df),
     }
 

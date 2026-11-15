@@ -5,22 +5,23 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 import re
 from pathlib import Path
 
 import numpy as np
 import torch
 from torch import nn
-from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
+from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 
-from fungai.config import ExperimentConfig, config_to_flat_dict, load_config, seed_everything
+from fungai.config import ExperimentConfig, load_config, seed_everything
 from fungai.eval.cost_matrix import cost_sensitive_weights
 from fungai.eval.report import evaluate_model, predictions_table
 from fungai.safety.preflight import run_preflight
 from fungai.tracking.mlflow_utils import (
-    log_epoch_metrics,
     log_data_snapshot,
+    log_epoch_metrics,
     log_evaluation_report,
     log_model_checkpoint,
     start_tracked_run,
@@ -73,7 +74,9 @@ def train_one_epoch(
     criterion: nn.Module,
     device: torch.device,
     grad_clip_norm: float = 0.0,
+    scheduler=None,
 ) -> float:
+    """One pass over the loader. The scheduler, if given, steps after every optimizer step."""
     model.train()
     total_loss = 0.0
     n_samples = 0
@@ -90,6 +93,8 @@ def train_one_epoch(
         if grad_clip_norm > 0:
             nn.utils.clip_grad_norm_(model.parameters(), grad_clip_norm)
         optimizer.step()
+        if scheduler is not None:
+            scheduler.step()
         total_loss += loss.item() * mask.sum().item()
         n_samples += mask.sum().item()
     return total_loss / max(n_samples, 1)
@@ -118,18 +123,29 @@ def validate_one_epoch(
     return total_loss / max(n_samples, 1)
 
 
-def build_scheduler(optimizer, config: ExperimentConfig):
-    if config.training.scheduler == "cosine":
-        warmup = LinearLR(
-            optimizer, start_factor=0.01, total_iters=config.training.warmup_epochs
-        )
-        cosine = CosineAnnealingLR(
-            optimizer, T_max=max(config.training.epochs - config.training.warmup_epochs, 1)
-        )
-        return SequentialLR(
-            optimizer, [warmup, cosine], milestones=[config.training.warmup_epochs]
-        )
-    return None
+def warmup_cosine_factor(step: int, total_steps: int, warmup_steps: int,
+                         start_factor: float = 0.01) -> float:
+    """LR multiplier at an optimizer step: linear warmup from `start_factor` to 1 over
+    `warmup_steps`, then cosine decay to 0 at `total_steps`."""
+    if warmup_steps > 0 and step < warmup_steps:
+        return start_factor + (1.0 - start_factor) * step / warmup_steps
+    decay_steps = max(total_steps - warmup_steps, 1)
+    progress = min(max(step - warmup_steps, 0) / decay_steps, 1.0)
+    return 0.5 * (1.0 + math.cos(math.pi * progress))
+
+
+def build_scheduler(optimizer, config: ExperimentConfig, steps_per_epoch: int = 1):
+    """Per-optimizer-step schedule. Warmup lasts `warmup_epochs` epochs measured in
+    steps, so a short run still reaches full LR inside its first epoch.
+
+    One multiplicative factor is applied to every parameter group, so the ratios
+    between groups (e.g. layer-wise LR decay) are preserved."""
+    if config.training.scheduler != "cosine":
+        return None
+    steps_per_epoch = max(int(steps_per_epoch), 1)
+    total = config.training.epochs * steps_per_epoch
+    warmup = min(config.training.warmup_epochs * steps_per_epoch, max(total - 1, 0))
+    return LambdaLR(optimizer, lambda step: warmup_cosine_factor(step, total, warmup))
 
 
 def build_criterion(
@@ -173,11 +189,16 @@ class EarlyStopping:
         self.best_value = float("-inf") if mode == "max" else float("inf")
         self.counter = 0
         self.best_epoch = 0
+        self.improved = False  # whether the most recent step set a new best
 
     def step(self, metrics: dict, epoch: int) -> bool:
-        """Returns True if training should stop."""
+        """Record this epoch's metric. Returns True if training should stop.
+
+        Check `improved` after calling this to decide whether to save a best checkpoint.
+        """
         value = metrics.get(self.metric_name, 0)
         improved = (value > self.best_value) if self.mode == "max" else (value < self.best_value)
+        self.improved = bool(improved)
         if improved:
             self.best_value = value
             self.counter = 0
@@ -280,7 +301,7 @@ def train(
         model.parameters(), lr=config.training.lr, weight_decay=config.training.weight_decay
     )
     criterion = build_criterion(config, species_map, toxicity_map, device)
-    scheduler = build_scheduler(optimizer, config)
+    scheduler = build_scheduler(optimizer, config, steps_per_epoch=len(train_loader))
     early_stopping = EarlyStopping(
         patience=config.training.early_stopping_patience,
         metric_name=config.training.early_stopping_metric,
@@ -297,6 +318,7 @@ def train(
     last_path = run_dir / "last.pth"
 
     import yaml as _yaml
+
     from fungai.config import config_to_flat_dict as _flat
     (run_dir / "config.yaml").write_text(
         _yaml.dump(_flat(config), default_flow_style=False)
@@ -320,7 +342,7 @@ def train(
         for epoch in range(config.training.epochs):
             train_loss = train_one_epoch(
                 model, train_loader, optimizer, criterion, device,
-                grad_clip_norm=config.training.grad_clip_norm,
+                grad_clip_norm=config.training.grad_clip_norm, scheduler=scheduler,
             )
 
             val_loss = validate_one_epoch(model, val_loader, criterion, device)
@@ -330,7 +352,7 @@ def train(
                 species_to_genus, genus_names, train_species_counts, eval_config,
             )
 
-            current_lr = optimizer.param_groups[0]["lr"]
+            current_lr = optimizer.param_groups[0]["lr"]  # at the end of the epoch
             epoch_metrics = {
                 "train_loss": train_loss,
                 "val_loss": val_loss,
@@ -350,15 +372,13 @@ def train(
                 flush=True,
             )
 
-            if scheduler:
-                scheduler.step()
-
             save_checkpoint(model, optimizer, epoch, epoch_metrics, last_path)
 
-            if early_stopping.counter == 0:
+            should_stop = early_stopping.step(epoch_metrics, epoch)
+            if early_stopping.improved:
                 save_checkpoint(model, optimizer, epoch, epoch_metrics, best_path)
 
-            if early_stopping.step(epoch_metrics, epoch):
+            if should_stop:
                 print(
                     f"Early stopping at epoch {epoch}. "
                     f"Best {early_stopping.metric_name}={early_stopping.best_value:.4f} "
@@ -395,7 +415,7 @@ def train(
     finally:
         mlflow.end_run()
         if watchdog:
-            print(f"\nPeak memory during training: {watchdog.peak_gb:.2f} GB", flush=True)
+            print(f"\nPeak memory during training: {watchdog.summary()}", flush=True)
             watchdog.stop()
 
 
@@ -411,9 +431,11 @@ def main() -> None:
 
     from fungai.data.dataset import (
         FungiDataset,
+        backbone_normalization,
         build_eval_transform,
         build_train_transform,
     )
+    from fungai.data.observations import select_eval_photos
     from fungai.data.sampler import build_train_sampler
     from fungai.data.snapshot import build_snapshot
     from fungai.model.classifier import FungiClassifier
@@ -427,14 +449,20 @@ def main() -> None:
     config.model.num_classes = len(species_map)
 
     train_df, val_df = frames["train"], frames["val"]
+    # Score on the same photos the observation model sees (first max_photos per
+    # observation), so per-image and observation runs are directly comparable.
+    val_df = select_eval_photos(val_df, config.data.max_photos)
 
     toxicity_map = _build_toxicity_map(species_map, train_df)
     species_to_genus = _build_species_to_genus(species_map, train_df)
     genus_names = protocol.genus_names
     train_species_counts = _build_train_species_counts(train_df, species_map)
 
-    train_transform = build_train_transform(config.data.image_size) if config.data.augmentation else build_eval_transform(config.data.image_size)
-    eval_transform = build_eval_transform(config.data.image_size)
+    mean, std = backbone_normalization(config.model.backbone)
+    d = config.data
+    train_transform = (build_train_transform(d.image_size, d.crop_scale_min, d.color_aug, mean, std)
+                       if d.augmentation else build_eval_transform(d.image_size, mean, std))
+    eval_transform = build_eval_transform(d.image_size, mean, std)
 
     train_ds = FungiDataset(train_df, transform=train_transform, label_map=species_map,
                             genus_map=protocol.genus_map)
