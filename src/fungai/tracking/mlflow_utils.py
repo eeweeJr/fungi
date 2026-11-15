@@ -67,17 +67,17 @@ def start_tracked_run(config: ExperimentConfig, run_name: str | None = None):
 
 
 def log_config_artifact(config_dict: dict, filename: str = "config.yaml") -> None:
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
-        yaml.dump(config_dict, f, default_flow_style=False)
-        f.flush()
-        mlflow.log_artifact(f.name, artifact_path="config")
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / filename
+        path.write_text(yaml.dump(config_dict, default_flow_style=False))
+        mlflow.log_artifact(str(path), artifact_path="config")
 
 
 def log_evaluation_report(report: dict, filename: str = "eval_report.json") -> None:
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-        json.dump(report, f, indent=2, default=str)
-        f.flush()
-        mlflow.log_artifact(f.name, artifact_path="evaluation")
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / filename
+        path.write_text(json.dumps(report, indent=2, default=str))
+        mlflow.log_artifact(str(path), artifact_path="evaluation")
 
 
 def log_model_checkpoint(model_path: Path) -> None:

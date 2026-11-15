@@ -10,6 +10,7 @@ from torch.optim.lr_scheduler import SequentialLR
 from fungai.config import ExperimentConfig
 from fungai.model.train import (
     EarlyStopping,
+    _build_toxicity_map,
     build_scheduler,
     save_checkpoint,
     train_one_epoch,
@@ -114,3 +115,10 @@ def test_open_set_labels_excluded(tiny_model, dummy_dataloader):
     loader = DataLoader(AllOpenSet(8), batch_size=4)
     loss = train_one_epoch(model, loader, optimizer, criterion, device)
     assert loss == 0.0
+
+
+def test_toxicity_map_int_encoding():
+    import pandas as pd
+
+    df = pd.DataFrame({"species": ["a", "a", "b", "b"], "toxicity": [1, 1, 0, 0]})
+    assert _build_toxicity_map({"a": 0, "b": 1}, df) == {"a": True, "b": False}

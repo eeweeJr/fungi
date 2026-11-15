@@ -189,7 +189,7 @@ def _build_toxicity_map(species_map: dict[str, int], train_df) -> dict[str, bool
             rows = train_df[train_df["species"] == sp]
             if len(rows) > 0:
                 tox_val = rows["toxicity"].mode()
-                tox_map[sp] = bool(len(tox_val) > 0 and str(tox_val.iloc[0]).lower() in ("poisonous", "toxic", "true"))
+                tox_map[sp] = bool(len(tox_val) > 0 and str(tox_val.iloc[0]).lower() in ("1", "1.0", "poisonous", "toxic", "true"))
             else:
                 tox_map[sp] = False
     else:
