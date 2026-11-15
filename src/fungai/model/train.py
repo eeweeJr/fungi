@@ -8,6 +8,7 @@ import logging
 import re
 from pathlib import Path
 
+import numpy as np
 import torch
 from torch import nn
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
@@ -15,10 +16,11 @@ from torch.utils.data import DataLoader
 
 from fungai.config import ExperimentConfig, config_to_flat_dict, load_config, seed_everything
 from fungai.eval.cost_matrix import cost_sensitive_weights
-from fungai.eval.report import evaluate_model
+from fungai.eval.report import evaluate_model, predictions_table
 from fungai.safety.preflight import run_preflight
 from fungai.tracking.mlflow_utils import (
     log_epoch_metrics,
+    log_data_snapshot,
     log_evaluation_report,
     log_model_checkpoint,
     start_tracked_run,
@@ -232,6 +234,7 @@ def train(
     species_to_genus: dict[int, str],
     genus_names: list[str],
     train_species_counts: dict[int, int],
+    data_snapshot: Path | None = None,
 ) -> None:
     """Full training loop with validation, checkpointing, MLflow tracking, and safety."""
     import mlflow
@@ -279,7 +282,12 @@ def train(
         "failure_gallery_n": config.evaluation.failure_gallery_n,
     }
 
-    run = start_tracked_run(config, run_name=version_name)
+    start_tracked_run(config, run_name=version_name)
+    if data_snapshot is not None:
+        log_data_snapshot(data_snapshot)
+        (run_dir / "data_snapshot.json").write_text(
+            json.dumps({"snapshot": Path(data_snapshot).name}, indent=2)
+        )
 
     try:
         for epoch in range(config.training.epochs):
@@ -335,14 +343,22 @@ def train(
         if best_path.exists():
             checkpoint = torch.load(best_path, weights_only=True)
             model.load_state_dict(checkpoint["model_state_dict"])
-            final_report = evaluate_model(
+            final_report, predictions = evaluate_model(
                 model, val_loader, device, species_map, toxicity_map,
                 species_to_genus, genus_names, train_species_counts, eval_config,
+                return_predictions=True,
             )
             (run_dir / "eval_report.json").write_text(
                 json.dumps(final_report, indent=2, default=str)
             )
             log_evaluation_report(final_report)
+            table, obs_probs = predictions_table(
+                predictions, species_map, species_to_genus, genus_names
+            )
+            table.to_parquet(run_dir / "val_predictions.parquet", index=False)
+            np.save(run_dir / "val_probs.npy", obs_probs)
+            mlflow.log_artifact(str(run_dir / "val_predictions.parquet"), artifact_path="predictions")
+            mlflow.log_artifact(str(run_dir / "val_probs.npy"), artifact_path="predictions")
             log_model_checkpoint(best_path)
             log_model_checkpoint(last_path)
 
@@ -368,21 +384,19 @@ def main() -> None:
         build_eval_transform,
         build_train_transform,
     )
-    from fungai.data.ingest import load_metadata
     from fungai.data.sampler import build_train_sampler
-    from fungai.data.splits import flag_revisited_sites, load_or_build_protocol
+    from fungai.data.snapshot import build_snapshot
     from fungai.model.classifier import FungiClassifier
 
-    protocol = load_or_build_protocol(
+    snapshot_dir, frames, protocol = build_snapshot(
         config.data.subset, config.data.protocol, config.data.split_seed,
         config.data.n_holdout_species, config.data.n_holdout_toxic, size=config.data.size,
     )
+    print(f"Data snapshot: {snapshot_dir.name}", flush=True)
     species_map = protocol.species_map
     config.model.num_classes = len(species_map)
 
-    train_df = protocol.apply(load_metadata(config.data.subset, "train", config.data.size), "train")
-    val_df = protocol.apply(load_metadata(config.data.subset, "val", config.data.size), "val")
-    val_df["revisited_site"] = flag_revisited_sites(val_df, train_df)
+    train_df, val_df = frames["train"], frames["val"]
 
     toxicity_map = _build_toxicity_map(species_map, train_df)
     species_to_genus = _build_species_to_genus(species_map, train_df)
@@ -418,7 +432,7 @@ def main() -> None:
 
     train(
         model, train_loader, val_loader, config, species_map, toxicity_map,
-        species_to_genus, genus_names, train_species_counts,
+        species_to_genus, genus_names, train_species_counts, data_snapshot=snapshot_dir,
     )
 
 

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import time
+from collections import Counter
 
 import numpy as np
+import pandas as pd
 import torch
 from torch.utils.data import DataLoader
 
@@ -99,6 +101,55 @@ def aggregate_by_observation(
         obs_labels.append(labels[indices[0]])
 
     return np.array(obs_probs), np.array(obs_labels)
+
+
+def predictions_table(
+    predictions: dict,
+    species_map: dict[str, int],
+    species_to_genus: dict[int, str],
+    genus_names: list[str],
+    top_k: int = 5,
+) -> tuple[pd.DataFrame, np.ndarray]:
+    """One row per observation, ready to join to a data snapshot on observation_id.
+
+    Returns the table and the matching [n_observations, n_classes] probabilities,
+    so thresholds and calibration can be revisited without re-running the model.
+    """
+    probs, labels = predictions["probs"], predictions["labels"]
+    obs_ids = predictions.get("observation_ids") or [str(i) for i in range(len(labels))]
+    obs_probs, obs_labels = aggregate_by_observation(probs, labels, obs_ids)
+    first = observation_first_indices(obs_ids)
+    n_images = Counter(obs_ids)
+
+    inv_map = {v: k for k, v in species_map.items()}
+    order = np.argsort(-obs_probs, axis=1)
+    pred = order[:, 0]
+    true_rank = np.full(len(obs_labels), -1)
+    known = obs_labels >= 0
+    true_rank[known] = np.argmax(order[known] == obs_labels[known, None], axis=1) + 1
+
+    g_probs = genus_probs(obs_probs, species_to_genus, genus_names)
+    table = pd.DataFrame({
+        "observation_id": [obs_ids[i] for i in first],
+        "n_images": [n_images[obs_ids[i]] for i in first],
+        "label": obs_labels,
+        "is_unknown": ~known,
+        "pred_label": pred,
+        "pred_species": [inv_map.get(int(p), "") for p in pred],
+        "pred_genus": [species_to_genus.get(int(p), "") for p in pred],
+        "confidence": obs_probs.max(axis=1),
+        "correct": known & (pred == obs_labels),
+        "true_rank": true_rank,  # 1 = top prediction; -1 = unknown species
+        "top_k_labels": [row[:top_k].tolist() for row in order],
+        "genus_pred_summed": [genus_names[i] for i in g_probs.argmax(axis=1)],
+        "genus_confidence_summed": g_probs.max(axis=1),
+    })
+    genus_true = predictions.get("genus_labels")
+    if genus_true is not None and len(genus_true) == len(labels):
+        genus_true = np.asarray(genus_true)[first]
+        table["genus_label"] = genus_true
+        table["genus_correct"] = g_probs.argmax(axis=1) == genus_true
+    return table, obs_probs.astype(np.float32)
 
 
 def build_evaluation_report(
@@ -236,10 +287,13 @@ def evaluate_model(
     genus_names: list[str],
     train_species_counts: dict[int, int],
     eval_config: dict | None = None,
-) -> dict:
-    """End-to-end: collect predictions → build report → return report dict."""
+    return_predictions: bool = False,
+) -> dict | tuple[dict, dict]:
+    """End-to-end: collect predictions → build report → return report dict
+    (and the raw predictions when `return_predictions` is set)."""
     predictions = collect_predictions(model, val_loader, device)
-    return build_evaluation_report(
+    report = build_evaluation_report(
         predictions, species_map, toxicity_map,
         species_to_genus, genus_names, train_species_counts, eval_config,
     )
+    return (report, predictions) if return_predictions else report

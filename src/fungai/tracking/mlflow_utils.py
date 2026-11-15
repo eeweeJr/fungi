@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 import subprocess
 import tempfile
+import warnings
 from pathlib import Path
 
 import mlflow
+import mlflow.data
 import yaml
 
 from fungai.config import ExperimentConfig, config_to_flat_dict
@@ -71,6 +73,31 @@ def log_config_artifact(config_dict: dict, filename: str = "config.yaml") -> Non
         path = Path(d) / filename
         path.write_text(yaml.dump(config_dict, default_flow_style=False))
         mlflow.log_artifact(str(path), artifact_path="config")
+
+
+def log_data_snapshot(snapshot_dir: Path) -> None:
+    """Record which split snapshot a run used: a tag, one MLflow dataset input per
+    split (name, digest, schema, source path) and the manifest as an artifact."""
+    import pandas as pd
+
+    manifest = json.loads((Path(snapshot_dir) / "manifest.json").read_text())
+    mlflow.set_tag("data.snapshot", manifest["id"])
+    for split, summary in manifest["splits"].items():
+        file = Path(snapshot_dir) / f"{split}.parquet"
+        df = pd.read_parquet(file)
+        for col in df.columns:
+            if isinstance(df[col].dtype, pd.CategoricalDtype):
+                df[col] = df[col].astype(str)
+        with warnings.catch_warnings():
+            # MLflow registers its local-file source twice and warns that the path is
+            # ambiguous between the two identical copies.
+            warnings.filterwarnings("ignore", message="The specified dataset source can be")
+            dataset = mlflow.data.from_pandas(
+                df, source=str(file.resolve()), name=f"{manifest['id']}/{split}",
+                digest=summary["digest"][:20],
+            )
+        mlflow.log_input(dataset, context=split)
+    mlflow.log_artifact(str(Path(snapshot_dir) / "manifest.json"), artifact_path="data")
 
 
 def log_evaluation_report(report: dict, filename: str = "eval_report.json") -> None:
