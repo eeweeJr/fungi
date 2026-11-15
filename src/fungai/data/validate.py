@@ -237,6 +237,36 @@ def check_duplicates(dfs: dict[str, pd.DataFrame], sample: int | None,
     )
 
 
+def check_leakage(dfs: dict[str, pd.DataFrame], subset: str) -> CheckResult:
+    """Cross-split leakage beyond shared ids: time, place, near-identical images,
+    and the open protocol's held-out species."""
+    from fungai.data import leakage
+    from fungai.data.splits import build_protocol
+
+    name = "leakage"
+    if set(dfs) != {"train", "val", "test"} or any("image_path" not in d.columns for d in dfs.values()):
+        return CheckResult(name, "SKIP", "needs all three splits with images")
+    hashed = leakage.with_hashes(dfs)
+    near = leakage.cross_split_near_duplicates(hashed)
+    events = leakage.shared_events(dfs)
+    temporal = leakage.temporal_violations(dfs)
+    conflicts = leakage.conflicting_label_files(hashed)
+    protocol = build_protocol("open", dfs["train"], dfs["val"], dfs["test"], subset=subset,
+                              excluded_files=conflicts)
+    applied = {s: protocol.apply(df, s) for s, df in dfs.items()}
+    violations = leakage.protocol_violations(protocol, applied)
+    failed = len(near) or events or temporal or violations
+    return CheckResult(
+        name, "FAIL" if failed else "PASS",
+        f"near-identical images across splits: {len(near)}; same day and spot across splits: "
+        f"{sum(map(len, events.values()))}; year overlap: {temporal or 'none'}; open-protocol "
+        f"violations: {len(violations)}; identical photos with two species (excluded from the "
+        f"open protocol, informational): {len(conflicts)}",
+        {"near_duplicates_sample": near.head(10).to_dict("records"), "shared_events": events,
+         "temporal": temporal, "protocol_violations": violations, "conflicting_label_files": conflicts},
+    )
+
+
 def check_masks(dfs: dict[str, pd.DataFrame], dest: Path) -> CheckResult:
     """Masks ship as parquet: one row per (image, body-part) RLE segmentation.
 
@@ -311,6 +341,7 @@ def run(subset: str, size: str, dest: Path, sample: int | None) -> int:
     if dfs:
         results.append(check_splits(dfs))
         results.append(check_duplicates(dfs, sample))
+        results.append(check_leakage(dfs, subset))
     results.append(check_masks(dfs, dest))
 
     width = max(len(r.name) for r in results) + 2

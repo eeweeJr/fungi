@@ -1,7 +1,7 @@
 {
   "subset": "mini",
   "size": "300",
-  "run_at": "2026-11-13T18:07:18",
+  "run_at": "2026-11-15T15:12:49",
   "results": [
     {
       "name": "file-metadata integrity [train]",
@@ -57,15 +57,15 @@
         "missing_sample": [],
         "orphans_sample": [
           "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/val/300p/1-3970590431.JPG",
-          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/val/300p/0-3944337808.JPG",
-          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/val/300p/1-3964841512.JPG",
-          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/val/300p/1-3968584348.JPG",
-          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/val/300p/1-4100090434.JPG",
-          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/val/300p/10-3968584348.JPG",
-          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/val/300p/0-3922623496.JPG",
-          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/val/300p/0-3964841512.JPG",
-          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/val/300p/0-3865765311.JPG",
-          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/val/300p/2-4100088483.JPG"
+          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/val/300p/4-3968584348.JPG",
+          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/val/300p/0-3922622691.JPG",
+          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/val/300p/2-3968584348.JPG",
+          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/val/300p/0-3944338838.JPG",
+          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/val/300p/0-3970590431.JPG",
+          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/val/300p/0-4100090434.JPG",
+          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/val/300p/0-3968584348.JPG",
+          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/val/300p/0-4100088483.JPG",
+          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/val/300p/1-3968584348.JPG"
         ],
         "n_missing": 0,
         "n_orphans": 38
@@ -109,16 +109,16 @@
       "details": {
         "missing_sample": [],
         "orphans_sample": [
-          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/test/300p/0-4465900230.JPG",
-          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/test/300p/1-4465899925.JPG",
-          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/test/300p/1-4465898738.JPG",
-          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/test/300p/0-4169770608.JPG",
-          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/test/300p/1-4465899466.JPG",
-          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/test/300p/0-4465889981.JPG",
-          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/test/300p/2-4465863362.JPG",
-          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/test/300p/2-4465899925.JPG",
-          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/test/300p/1-4100102558.JPG",
-          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/test/300p/4-4465863026.JPG"
+          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/test/300p/0-4465868355.JPG",
+          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/test/300p/1-4465893875.JPG",
+          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/test/300p/3-4465875483.JPG",
+          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/test/300p/0-4465872847.JPG",
+          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/test/300p/1-4465885066.JPG",
+          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/test/300p/4-4465881082.JPG",
+          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/test/300p/0-4465870424.JPG",
+          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/test/300p/0-4465894542.JPG",
+          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/test/300p/0-4465877505.JPG",
+          "/Users/ewanbloor/Desktop/personal_project/data/raw/FungiTastic/images/FungiTastic-Mini/test/300p/0-4465899493.JPG"
         ],
         "n_missing": 0,
         "n_orphans": 176
@@ -176,6 +176,25 @@
       "details": {
         "cross_split_sample": {},
         "n_within_split_groups": 1
+      }
+    },
+    {
+      "name": "leakage",
+      "status": "PASS",
+      "summary": "near-identical images across splits: 0; same day and spot across splits: 0; year overlap: none; open-protocol violations: 0; identical photos with two species (excluded from the open protocol, informational): 6",
+      "details": {
+        "near_duplicates_sample": [],
+        "shared_events": {},
+        "temporal": [],
+        "protocol_violations": [],
+        "conflicting_label_files": [
+          "0-2238397094.JPG",
+          "0-2238397996.JPG",
+          "0-2238555651.JPG",
+          "0-2238556471.JPG",
+          "0-4465876215.JPG",
+          "0-4465878213.JPG"
+        ]
       }
     },
     {

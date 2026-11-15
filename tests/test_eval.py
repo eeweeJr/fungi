@@ -212,3 +212,89 @@ def test_aggregate_by_observation():
     obs1_row = agg_probs[agg_labels == 0][0]
     assert obs1_row[0] == pytest.approx(0.7)
     assert obs1_row[1] == pytest.approx(0.3)
+
+
+# --- genus and open-set ---
+
+
+def test_genus_probs_sums_species_within_genus():
+    from fungai.eval.metrics import genus_probs
+
+    probs = np.array([[0.1, 0.2, 0.7], [0.5, 0.4, 0.1]])
+    out = genus_probs(probs, {0: "A", 1: "A", 2: "B"}, ["A", "B"])
+    assert out == pytest.approx(np.array([[0.3, 0.7], [0.9, 0.1]]))
+
+
+def test_genus_accuracy_macro_differs_from_plain():
+    from fungai.eval.metrics import genus_accuracy
+
+    # genus 0: 8 samples all right; genus 1: 2 samples both wrong
+    g_true = np.array([0] * 8 + [1] * 2)
+    g_probs = np.tile([0.9, 0.1], (10, 1))
+    out = genus_accuracy(g_true, g_probs, ["A", "B"])
+    assert out["accuracy"] == pytest.approx(0.8)
+    assert out["macro_accuracy"] == pytest.approx(0.5)
+    assert out["per_genus_recall"] == {"A": 1.0, "B": 0.0}
+    assert genus_accuracy(np.array([-1]), g_probs[:1], ["A", "B"])["n_samples"] == 0
+
+
+def test_error_decomposition_sums_to_one():
+    from fungai.eval.metrics import error_decomposition
+
+    s2g = {0: "A", 1: "A", 2: "B"}
+    y_true = np.array([0, 0, 0, 2, -1])
+    y_pred = np.array([0, 1, 2, 2, 0])
+    out = error_decomposition(y_true, y_pred, s2g)
+    assert out["correct"] == pytest.approx(0.5)
+    assert out["right_genus_wrong_species"] == pytest.approx(0.25)
+    assert out["wrong_genus"] == pytest.approx(0.25)
+    assert out["n_samples"] == 4
+
+
+def test_open_set_metrics_separable_and_fixed_threshold():
+    from fungai.eval.calibration import open_set_metrics
+
+    known = np.tile([0.9, 0.1], (20, 1))
+    unknown = np.tile([0.55, 0.45], (10, 1))
+    probs = np.vstack([known, unknown])
+    y = np.array([0] * 20 + [-1] * 10)
+    out = open_set_metrics(probs, y)
+    assert out["auroc"] == pytest.approx(1.0)
+    assert out["unknown_false_acceptance_rate"] == 0.0
+    assert out["known_retained"] == pytest.approx(1.0)
+    loose = open_set_metrics(probs, y, threshold=0.5)
+    assert loose["unknown_false_acceptance_rate"] == 1.0
+    assert open_set_metrics(known, np.zeros(20, dtype=int))["auroc"] is None
+
+
+def test_report_genus_site_and_gallery_use_observation_level(dummy_species_map, dummy_toxicity_map):
+    # 3 observations x 2 images; the last observation is an unknown species of genus 1
+    probs = np.array([
+        [0.9, 0.1, 0, 0, 0], [0.7, 0.3, 0, 0, 0],      # obs a: species 0, right
+        [0.2, 0.8, 0, 0, 0], [0.4, 0.6, 0, 0, 0],      # obs b: species 0, predicted 1 (same genus)
+        [0, 0, 0.6, 0.4, 0], [0, 0, 0.5, 0.5, 0],      # obs c: unknown, genus 1
+    ])
+    predictions = {
+        "probs": probs,
+        "labels": np.array([0, 0, 0, 0, -1, -1]),
+        "image_paths": [f"/img_{i}.jpg" for i in range(6)],
+        "observation_ids": ["a", "a", "b", "b", "c", "c"],
+        "genus_labels": np.array([0, 0, 0, 0, 1, 1]),
+        "revisited": np.array([True, True, False, False, False, False]),
+    }
+    s2g = {0: "g0", 1: "g0", 2: "g1", 3: "g1", 4: "g1"}
+    report = build_evaluation_report(
+        predictions, dummy_species_map, dummy_toxicity_map, s2g, ["g0", "g1"], {i: 50 for i in range(5)},
+    )
+    assert report["n_open_set_observations"] == 1
+    assert report["genus"]["known"]["accuracy"] == 1.0
+    assert report["genus"]["unknown"] == {
+        "accuracy": 1.0, "macro_accuracy": 1.0, "per_genus_recall": {"g1": 1.0}, "n_samples": 1,
+    }
+    assert report["error_decomposition"]["right_genus_wrong_species"] == pytest.approx(0.5)
+    assert report["stratified"]["by_site"]["revisited"]["n_samples"] == 1
+    assert report["stratified"]["by_site"]["revisited"]["top_1_accuracy"] == 1.0
+    assert report["stratified"]["by_site"]["new_site"]["top_1_accuracy"] == 0.0
+    assert report["stratified"]["by_toxicity"]["edible"]["n_samples"] == 0  # unknowns not counted as edible
+    assert report["open_set"]["auroc"] is not None
+    assert [g["image_path"] for g in report["failure_gallery"]] == ["/img_2.jpg"]

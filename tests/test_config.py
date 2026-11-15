@@ -56,3 +56,14 @@ def test_seed_everything():
     seed_everything(123)
     b = torch.randn(5)
     assert torch.equal(a, b)
+
+
+def test_data_protocol_defaults_and_validation(tmp_path):
+    cfg = load_config("configs/default.yaml")
+    assert cfg.data.protocol == "open"
+    assert cfg.data.sampler == "sqrt"
+    for bad in ({"protocol": "half-open"}, {"sampler": "weighted"}):
+        p = tmp_path / "bad.yaml"
+        p.write_text(yaml.dump({"data": bad}))
+        with pytest.raises(ValueError):
+            load_config(p)

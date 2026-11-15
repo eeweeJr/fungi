@@ -103,3 +103,64 @@ def rarity_buckets(species_counts: dict[int, int]) -> dict[int, str]:
         else:
             buckets[species_id] = "common"
     return buckets
+
+
+def genus_probs(
+    probs: np.ndarray,
+    species_to_genus: dict[int, str],
+    genus_names: list[str],
+) -> np.ndarray:
+    """Sum species probabilities within each genus. Shape [n, n_genera]."""
+    genus_idx = {g: i for i, g in enumerate(genus_names)}
+    out = np.zeros((probs.shape[0], len(genus_names)), dtype=probs.dtype)
+    for species_id in range(probs.shape[1]):
+        g = genus_idx.get(species_to_genus.get(species_id))
+        if g is not None:
+            out[:, g] += probs[:, species_id]
+    return out
+
+
+def genus_accuracy(
+    genus_true: np.ndarray,
+    g_probs: np.ndarray,
+    genus_names: list[str],
+) -> dict:
+    """Genus accuracy, plus the mean of per-genus recall so big genera don't dominate."""
+    mask = genus_true >= 0
+    if mask.sum() == 0:
+        return {"accuracy": None, "macro_accuracy": None, "per_genus_recall": {}, "n_samples": 0}
+    yt = genus_true[mask]
+    correct = g_probs[mask].argmax(axis=1) == yt
+    recall = {
+        name: float(correct[yt == i].mean())
+        for i, name in enumerate(genus_names) if (yt == i).any()
+    }
+    return {
+        "accuracy": float(correct.mean()),
+        "macro_accuracy": float(np.mean(list(recall.values()))),
+        "per_genus_recall": recall,
+        "n_samples": int(mask.sum()),
+    }
+
+
+def error_decomposition(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    species_to_genus: dict[int, str],
+) -> dict:
+    """Split known-species predictions into: right, sibling species, wrong genus."""
+    mask = y_true >= 0
+    n = int(mask.sum())
+    if n == 0:
+        return {"correct": None, "right_genus_wrong_species": None, "wrong_genus": None, "n_samples": 0}
+    yt, yp = y_true[mask], y_pred[mask]
+    correct = yt == yp
+    same_genus = np.array([
+        species_to_genus.get(int(t)) == species_to_genus.get(int(p)) for t, p in zip(yt, yp)
+    ])
+    return {
+        "correct": float(correct.mean()),
+        "right_genus_wrong_species": float((~correct & same_genus).mean()),
+        "wrong_genus": float((~same_genus).mean()),
+        "n_samples": n,
+    }

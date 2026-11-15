@@ -13,6 +13,11 @@ data:
   num_workers: 0
   pin_memory: false
   augmentation: true
+  protocol: open          # open: hold species out as unknowns | closed: 210-class benchmark
+  split_seed: 42          # fixes which species are held out
+  n_holdout_species: 30
+  n_holdout_toxic: 2
+  sampler: sqrt           # none | observation | sqrt | balanced
 
 model:
   backbone: vit_base_patch16_224

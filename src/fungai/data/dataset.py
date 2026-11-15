@@ -133,12 +133,16 @@ class FungiDataset(Dataset):
         metadata: pd.DataFrame,
         transform: transforms.Compose | None = None,
         label_map: dict[str, int] | None = None,
+        genus_map: dict[str, int] | None = None,
     ):
         if "image_path" not in metadata.columns:
             raise KeyError("metadata needs an 'image_path' column (are images downloaded?)")
         self.metadata = metadata.reset_index(drop=True)
         self.transform = transform or DEFAULT_TRANSFORM
         self.label_map = label_map or {}
+        # Genus is labelled separately because a held-out species (label -1)
+        # still has a known genus.
+        self.genus_map = genus_map
 
     @classmethod
     def from_split(
@@ -171,6 +175,10 @@ class FungiDataset(Dataset):
         }
         if "observation_id" in row.index:
             result["observation_id"] = str(row["observation_id"])
+        if self.genus_map is not None:
+            result["genus_label"] = self.genus_map.get(row.get("genus"), -1)
+        if "revisited_site" in row.index:
+            result["revisited_site"] = bool(row["revisited_site"])
         return result
 
 

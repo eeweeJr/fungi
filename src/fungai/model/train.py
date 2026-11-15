@@ -57,6 +57,10 @@ def _fungi_collate(batch: list[dict]) -> dict:
         result["observation_id"] = [b["observation_id"] for b in batch]
     if "species" in batch[0]:
         result["species"] = [b["species"] for b in batch]
+    if "genus_label" in batch[0]:
+        result["genus_label"] = torch.tensor([b["genus_label"] for b in batch], dtype=torch.long)
+    if "revisited_site" in batch[0]:
+        result["revisited_site"] = torch.tensor([b["revisited_site"] for b in batch], dtype=torch.bool)
     return result
 
 
@@ -363,30 +367,39 @@ def main() -> None:
         FungiDataset,
         build_eval_transform,
         build_train_transform,
-        load_or_build_species_map,
     )
     from fungai.data.ingest import load_metadata
+    from fungai.data.sampler import build_train_sampler
+    from fungai.data.splits import flag_revisited_sites, load_or_build_protocol
     from fungai.model.classifier import FungiClassifier
 
-    species_map = load_or_build_species_map(config.data.subset)
+    protocol = load_or_build_protocol(
+        config.data.subset, config.data.protocol, config.data.split_seed,
+        config.data.n_holdout_species, config.data.n_holdout_toxic, size=config.data.size,
+    )
+    species_map = protocol.species_map
     config.model.num_classes = len(species_map)
 
-    train_df = load_metadata(config.data.subset, "train", config.data.size)
-    val_df = load_metadata(config.data.subset, "val", config.data.size)
+    train_df = protocol.apply(load_metadata(config.data.subset, "train", config.data.size), "train")
+    val_df = protocol.apply(load_metadata(config.data.subset, "val", config.data.size), "val")
+    val_df["revisited_site"] = flag_revisited_sites(val_df, train_df)
 
     toxicity_map = _build_toxicity_map(species_map, train_df)
     species_to_genus = _build_species_to_genus(species_map, train_df)
-    genus_names = sorted(set(species_to_genus.values()))
+    genus_names = protocol.genus_names
     train_species_counts = _build_train_species_counts(train_df, species_map)
 
     train_transform = build_train_transform(config.data.image_size) if config.data.augmentation else build_eval_transform(config.data.image_size)
     eval_transform = build_eval_transform(config.data.image_size)
 
-    train_ds = FungiDataset(train_df, transform=train_transform, label_map=species_map)
-    val_ds = FungiDataset(val_df, transform=eval_transform, label_map=species_map)
+    train_ds = FungiDataset(train_df, transform=train_transform, label_map=species_map,
+                            genus_map=protocol.genus_map)
+    val_ds = FungiDataset(val_df, transform=eval_transform, label_map=species_map,
+                          genus_map=protocol.genus_map)
 
+    sampler = build_train_sampler(train_df, config.data.sampler, seed=config.seed)
     train_loader = DataLoader(
-        train_ds, batch_size=config.data.batch_size, shuffle=True,
+        train_ds, batch_size=config.data.batch_size, shuffle=sampler is None, sampler=sampler,
         num_workers=config.data.num_workers, pin_memory=config.data.pin_memory,
         collate_fn=_fungi_collate,
     )

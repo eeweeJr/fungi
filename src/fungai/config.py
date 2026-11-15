@@ -22,6 +22,13 @@ class DataConfig:
     num_workers: int = 0
     pin_memory: bool = False
     augmentation: bool = True
+    # open: hold some species out of train as unknowns; closed: the 210-class benchmark
+    protocol: str = "open"
+    split_seed: int = 42  # fixes the held-out species; independent of the run seed
+    n_holdout_species: int = 30
+    n_holdout_toxic: int = 2
+    # none: shuffle images; observation | sqrt | balanced: draw by observation
+    sampler: str = "sqrt"
 
 
 @dataclass
@@ -113,6 +120,12 @@ def _validate(cfg: ExperimentConfig) -> None:
         raise ValueError(f"batch_size must be >= 1, got {cfg.data.batch_size}")
     if cfg.data.image_size < 1:
         raise ValueError(f"image_size must be >= 1, got {cfg.data.image_size}")
+    if cfg.data.protocol not in ("open", "closed"):
+        raise ValueError(f"protocol must be 'open' or 'closed', got {cfg.data.protocol}")
+    if cfg.data.sampler not in ("none", "observation", "sqrt", "balanced"):
+        raise ValueError(
+            f"sampler must be none, observation, sqrt or balanced, got {cfg.data.sampler}"
+        )
     if cfg.training.epochs < 1:
         raise ValueError(f"epochs must be >= 1, got {cfg.training.epochs}")
     if cfg.training.lr <= 0:

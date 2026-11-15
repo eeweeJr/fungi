@@ -94,3 +94,35 @@ def open_set_detection_rate(
         "false_acceptance_rate": float((open_confidences > confidence_threshold).mean()),
         "mean_open_set_confidence": float(open_confidences.mean()),
     }
+
+
+def open_set_metrics(
+    probs: np.ndarray,
+    y_true: np.ndarray,
+    known_retention: float = 0.95,
+    threshold: float | None = None,
+) -> dict:
+    """How well top-1 confidence separates known species from unknown ones (label -1).
+
+    auroc: chance a known sample is more confident than an unknown one.
+    The false acceptance rate is measured at `threshold`; when none is given it is
+    set so that `known_retention` of the known samples are kept. Tune it on val and
+    pass it in for test.
+    """
+    open_mask = y_true == -1
+    confidences = probs.max(axis=1)
+    known, unknown = confidences[~open_mask], confidences[open_mask]
+    if len(known) == 0 or len(unknown) == 0:
+        return {"auroc": None, "threshold": threshold, "known_retained": None,
+                "unknown_false_acceptance_rate": None}
+
+    from sklearn.metrics import roc_auc_score
+
+    if threshold is None:
+        threshold = float(np.quantile(known, 1.0 - known_retention))
+    return {
+        "auroc": float(roc_auc_score(~open_mask, confidences)),
+        "threshold": float(threshold),
+        "known_retained": float((known >= threshold).mean()),
+        "unknown_false_acceptance_rate": float((unknown >= threshold).mean()),
+    }
