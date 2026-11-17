@@ -7,7 +7,7 @@
 # Run: uv run python -m fungai.model.train_observation --config configs/babys_first_model_smoke.yaml
 
 seed: 42
-experiment_name: "babys-first-model"
+experiment_name: "fungai-dev"  # one experiment for the whole project; runs differ by tags.config / model.arch
 run_name: null
 notes: "smoke: ViT-S/16 224px on 300p images, pipeline proof only"
 

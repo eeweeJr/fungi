@@ -277,6 +277,34 @@ def _push_best_checkpoint(run_dir: Path, config: ExperimentConfig, early_stoppin
     print(f"Best checkpoint pushed: {record['url']}", flush=True)
 
 
+def final_eval_config(config: ExperimentConfig, eval_config: dict) -> dict:
+    """The per-epoch eval config plus bootstrap intervals, which only the final
+    evaluation pays for (about 15 s on the val set)."""
+    return {**eval_config, "bootstrap_samples": config.evaluation.bootstrap_samples,
+            "bootstrap_seed": config.evaluation.bootstrap_seed}
+
+
+def log_final_metrics(report: dict) -> None:
+    """Best-checkpoint numbers as MLflow metrics, named like the observation runs'
+    (final_val_*), with the bootstrap interval as _lo / _hi."""
+    import mlflow
+
+    pm, iv = report["primary_metrics"], report.get("intervals", {})
+    metrics = {
+        "final_val_macro_f1": pm["macro_f1"],
+        "final_val_top_1_accuracy": pm["top_1_accuracy"],
+        "final_val_top_5_accuracy": pm["top_5_accuracy"],
+        "final_val_ece": report["calibration"]["ece"],
+    }
+    if report.get("best_epoch") is not None:
+        metrics["best_epoch"] = report["best_epoch"]
+    for name, ci in iv.items():
+        if ci.get("lo") is not None:
+            metrics[f"final_val_{name}_lo"] = ci["lo"]
+            metrics[f"final_val_{name}_hi"] = ci["hi"]
+    mlflow.log_metrics({k: float(v) for k, v in metrics.items() if v is not None})
+
+
 def train(
     model: nn.Module,
     train_loader: DataLoader,
@@ -408,14 +436,16 @@ def train(
                 model.load_state_dict(checkpoint["model_state_dict"])
                 final_report, predictions = evaluate_model(
                     model, mon.track(val_loader, "final eval"), device, species_map, toxicity_map,
-                    species_to_genus, genus_names, train_species_counts, eval_config,
-                    return_predictions=True,
+                    species_to_genus, genus_names, train_species_counts,
+                    final_eval_config(config, eval_config), return_predictions=True,
                 )
+                final_report["best_epoch"] = early_stopping.best_epoch
                 mon.phase("logging results")
                 (run_dir / "eval_report.json").write_text(
                     json.dumps(final_report, indent=2, default=str)
                 )
                 log_evaluation_report(final_report)
+                log_final_metrics(final_report)
                 table, obs_probs = predictions_table(
                     predictions, species_map, species_to_genus, genus_names
                 )

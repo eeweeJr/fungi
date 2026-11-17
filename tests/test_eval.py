@@ -23,7 +23,6 @@ from fungai.eval.metrics import (
 )
 from fungai.eval.report import aggregate_by_observation, build_evaluation_report
 
-
 # --- metrics ---
 
 
@@ -197,6 +196,37 @@ def test_build_evaluation_report_keys(dummy_probs, dummy_labels, dummy_species_m
         assert k in report, f"Missing key: {k}"
     assert "macro_f1" in report["primary_metrics"]
     assert "by_genus" in report["stratified"]
+    assert "intervals" not in report  # only the final evaluation asks for them
+
+    with_ci = build_evaluation_report(
+        predictions, dummy_species_map, dummy_toxicity_map, species_to_genus, genus_names,
+        train_counts, {"bootstrap_samples": 50, "bootstrap_seed": 0},
+    )
+    for name in ("macro_f1", "top_1_accuracy", "top_5_accuracy"):
+        ci = with_ci["intervals"][name]
+        assert ci["lo"] <= ci["value"] <= ci["hi"]
+    assert with_ci["intervals"]["macro_f1"]["value"] == pytest.approx(
+        with_ci["primary_metrics"]["macro_f1"])
+
+
+def test_macro_f1_averages_over_true_species_only():
+    # species 2 is never the truth, only a wrong prediction: it must not add a 0 to the mean
+    y_true = np.array([0, 0, 1, 1])
+    y_pred = np.array([0, 0, 1, 2])
+    # species 0: F1 1.0; species 1: P 1, R 0.5 -> F1 2/3
+    assert macro_f1(y_true, y_pred) == pytest.approx((1.0 + 2 / 3) / 2)
+
+
+def test_stratified_macro_f1_counts_only_the_groups_species():
+    # group A = species 0, 1; one A observation is predicted as species 2 (group B)
+    y_true = np.array([0, 0, 1, 1, 2, 2])
+    y_pred = np.array([0, 0, 1, 2, 2, 2])
+    probs = np.eye(3)[y_pred]
+    groups = np.array(["A", "A", "A", "A", "B", "B"])
+    out = stratified_breakdown(y_true, y_pred, probs, groups, ["A", "B"])
+    assert out["A"]["macro_f1"] == pytest.approx((1.0 + 2 / 3) / 2)  # was 0.556 with species 2 as a 0
+    assert out["A"]["n_species"] == 2
+    assert out["B"]["macro_f1"] == pytest.approx(1.0)
 
 
 def test_aggregate_by_observation():

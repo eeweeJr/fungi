@@ -121,3 +121,15 @@ def test_real_open_snapshot_passes_split_gate():
     df = load_snapshot("latest", image_paths=False)
     frames = {s: df[df["split"] == s] for s in ("train", "val", "test")}
     run_split_gate(SplitProtocol.load(proto_path), frames)
+
+
+def test_bootstrap_strata_keep_every_stratum_in_every_draw():
+    # 1 rare species with a single, wrongly predicted observation; a plain resample often
+    # drops it (inflating macro F1), a stratified one never does
+    y = np.array([0] * 50 + [1] * 50 + [2])
+    p = np.array([0] * 50 + [1] * 50 + [0])
+    seen = []
+    ci = bootstrap_ci(lambda i: seen.append(len(np.unique(y[i]))) or macro_f1(y[i], p[i]), len(y),
+                      n_samples=200, seed=0, strata=y)
+    assert set(seen) == {3}
+    assert ci["lo"] <= ci["value"] <= ci["hi"]

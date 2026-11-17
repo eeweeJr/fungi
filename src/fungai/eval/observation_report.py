@@ -180,11 +180,14 @@ def build_observation_sections(
     hi = np.flatnonzero(~known)
     yk, fk, ak = labels[ki], fused[ki].argmax(1), avg[ki].argmax(1)
     intervals = {
-        "macro_f1": bootstrap_ci(lambda i: macro_f1(yk[i], fk[i]), len(ki), n_s, seed),
-        "top_1_accuracy": bootstrap_ci(lambda i: float((yk[i] == fk[i]).mean()), len(ki), n_s, seed),
-        "photo_average_macro_f1": bootstrap_ci(lambda i: macro_f1(yk[i], ak[i]), len(ki), n_s, seed),
+        # resampled within species, so rare species stay in every draw (see bootstrap_ci)
+        "macro_f1": bootstrap_ci(lambda i: macro_f1(yk[i], fk[i]), len(ki), n_s, seed, strata=yk),
+        "top_1_accuracy": bootstrap_ci(lambda i: float((yk[i] == fk[i]).mean()), len(ki), n_s, seed,
+                                       strata=yk),
+        "photo_average_macro_f1": bootstrap_ci(lambda i: macro_f1(yk[i], ak[i]), len(ki), n_s, seed,
+                                               strata=yk),
         "fused_minus_photo_average_macro_f1": bootstrap_ci(
-            lambda i: macro_f1(yk[i], fk[i]) - macro_f1(yk[i], ak[i]), len(ki), n_s, seed),
+            lambda i: macro_f1(yk[i], fk[i]) - macro_f1(yk[i], ak[i]), len(ki), n_s, seed, strata=yk),
     }
     if len(hi):
         gh = (pred["genus_probs_head"][hi].argmax(1) == glabels[hi]).astype(float)

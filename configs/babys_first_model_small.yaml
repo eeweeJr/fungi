@@ -6,7 +6,7 @@
 # Run: uv run python -m fungai.model.train_observation --config configs/babys_first_model_small.yaml
 
 seed: 42
-experiment_name: "babys-first-model"
+experiment_name: "fungai-dev"  # one experiment for the whole project; runs differ by tags.config / model.arch
 run_name: null
 notes: "v1 test train: ViT-S/16 448px, Perceiver fusion, hierarchical head"
 

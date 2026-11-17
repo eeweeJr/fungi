@@ -75,6 +75,9 @@ def start_tracked_run(config: ExperimentConfig, run_name: str | None = None,
         mlflow.log_param(k, str(v)[:500])
 
     mlflow.log_param("git_hash", get_git_hash())
+    # Which config file made this run (E0, E2, ... share one experiment, so this names them).
+    if getattr(config, "source_path", None):
+        mlflow.set_tag("config", Path(config.source_path).name)
     mlflow.log_param("version", run_name)
 
     log_config_artifact(flat)

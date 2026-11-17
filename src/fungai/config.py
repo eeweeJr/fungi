@@ -186,6 +186,7 @@ def load_config(path: str | Path) -> ExperimentConfig:
 
     cfg = ExperimentConfig(**top_kwargs)
     _validate(cfg)
+    cfg.source_path = str(path)  # not a config field: tagged on the MLflow run as `config`
     return cfg
 
 

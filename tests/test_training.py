@@ -179,3 +179,20 @@ def test_toxicity_map_int_encoding():
 
     df = pd.DataFrame({"species": ["a", "a", "b", "b"], "toxicity": [1, 1, 0, 0]})
     assert _build_toxicity_map({"a": 0, "b": 1}, df) == {"a": True, "b": False}
+
+
+def test_log_final_metrics_logs_values_and_intervals(tmp_path):
+    import mlflow
+
+    from fungai.model.train import log_final_metrics
+
+    mlflow.set_tracking_uri(f"sqlite:///{tmp_path / 'm.db'}")
+    mlflow.set_experiment("final-metrics-test")  # earlier tests leave another store's experiment active
+    report = {"primary_metrics": {"macro_f1": 0.57, "top_1_accuracy": 0.83, "top_5_accuracy": 0.96},
+              "calibration": {"ece": 0.05}, "best_epoch": 8,
+              "intervals": {"macro_f1": {"value": 0.57, "lo": 0.54, "hi": 0.58}}}
+    with mlflow.start_run() as run:
+        log_final_metrics(report)
+    m = mlflow.get_run(run.info.run_id).data.metrics
+    assert m["final_val_macro_f1"] == 0.57 and m["final_val_macro_f1_lo"] == 0.54
+    assert m["final_val_macro_f1_hi"] == 0.58 and m["best_epoch"] == 8

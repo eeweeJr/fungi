@@ -109,7 +109,7 @@ def _flat_yaml(path: str) -> dict:
 def test_bfm_config_loads_and_validates(path):
     cfg = load_config(path)
     assert cfg.model.arch == "observation"
-    assert cfg.experiment_name == "babys-first-model"
+    assert cfg.experiment_name == "fungai-dev"
 
 
 @pytest.mark.parametrize("path", ALL_BFM)

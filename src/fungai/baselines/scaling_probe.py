@@ -146,7 +146,8 @@ def run(cfg: ExperimentConfig, backbones: list[str], limit: int | None = None) -
     # each backbone's numbers go in a nested child run.
     start_monitored_run("scaling_probe", experiment_id=exp_id)
     mlflow.set_tags({"kind": "scaling_probe", "git_hash": get_git_hash(),
-                     "backbones": ",".join(backbones), "limit": str(limit or "none")})
+                     "backbones": ",".join(backbones), "limit": str(limit or "none"),
+                     "config": Path(getattr(cfg, "source_path", "") or "?").name})
     try:
         with RunMonitor(out, len(backbones), watchdog=watchdog) as mon:
             mon.phase("loading data")
