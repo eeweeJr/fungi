@@ -75,8 +75,10 @@ def train_one_epoch(
     device: torch.device,
     grad_clip_norm: float = 0.0,
     scheduler=None,
+    monitor=None,
 ) -> float:
-    """One pass over the loader. The scheduler, if given, steps after every optimizer step."""
+    """One pass over the loader. The scheduler, if given, steps after every optimizer step.
+    `monitor` (a RunMonitor) receives each batch's loss for the live running loss."""
     model.train()
     total_loss = 0.0
     n_samples = 0
@@ -95,8 +97,11 @@ def train_one_epoch(
         optimizer.step()
         if scheduler is not None:
             scheduler.step()
-        total_loss += loss.item() * mask.sum().item()
+        loss_value = loss.item()
+        total_loss += loss_value * mask.sum().item()
         n_samples += mask.sum().item()
+        if monitor is not None:
+            monitor.record_loss(loss_value)
     return total_loss / max(n_samples, 1)
 
 
@@ -307,10 +312,6 @@ def train(
         metric_name=config.training.early_stopping_metric,
     )
 
-    watchdog = None
-    if config.safety.preflight_enabled:
-        watchdog = run_preflight(config, model, train_loader, optimizer, criterion, device)
-
     version_name = _next_version(config.experiment_name)
     run_dir = OUTPUTS_DIR / version_name
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -320,6 +321,7 @@ def train(
     import yaml as _yaml
 
     from fungai.config import config_to_flat_dict as _flat
+    from fungai.tracking.monitor import RunMonitor
     (run_dir / "config.yaml").write_text(
         _yaml.dump(_flat(config), default_flow_style=False)
     )
@@ -331,6 +333,7 @@ def train(
         "failure_gallery_n": config.evaluation.failure_gallery_n,
     }
 
+    # The run starts before the preflight so a refused or failed preflight is in MLflow too.
     start_tracked_run(config, run_name=version_name)
     if data_snapshot is not None:
         log_data_snapshot(data_snapshot)
@@ -338,82 +341,97 @@ def train(
             json.dumps({"snapshot": Path(data_snapshot).name}, indent=2)
         )
 
+    watchdog = None
     try:
-        for epoch in range(config.training.epochs):
-            train_loss = train_one_epoch(
-                model, train_loader, optimizer, criterion, device,
-                grad_clip_norm=config.training.grad_clip_norm, scheduler=scheduler,
-            )
+        with RunMonitor(run_dir, config.training.epochs,
+                        memory_limit_gb=config.safety.memory_limit_gb) as mon:
+            if config.safety.preflight_enabled:
+                mon.phase("preflight")
+                watchdog = run_preflight(config, model, train_loader, optimizer, criterion, device)
+                mon.attach_watchdog(watchdog)
 
-            val_loss = validate_one_epoch(model, val_loader, criterion, device)
+            for epoch in range(config.training.epochs):
+                mon.start_epoch(epoch)
+                train_loss = train_one_epoch(
+                    model, mon.track(train_loader, "train"), optimizer, criterion, device,
+                    grad_clip_norm=config.training.grad_clip_norm, scheduler=scheduler,
+                    monitor=mon,
+                )
 
-            eval_report = evaluate_model(
-                model, val_loader, device, species_map, toxicity_map,
-                species_to_genus, genus_names, train_species_counts, eval_config,
-            )
+                val_loss = validate_one_epoch(model, mon.track(val_loader, "val loss"), criterion, device)
 
-            current_lr = optimizer.param_groups[0]["lr"]  # at the end of the epoch
-            epoch_metrics = {
-                "train_loss": train_loss,
-                "val_loss": val_loss,
-                "lr": current_lr,
-                "val_macro_f1": eval_report["primary_metrics"]["macro_f1"],
-                "val_top_1_accuracy": eval_report["primary_metrics"]["top_1_accuracy"],
-                "val_top_5_accuracy": eval_report["primary_metrics"]["top_5_accuracy"],
-                "val_ece": eval_report["calibration"]["ece"],
-            }
+                eval_report = evaluate_model(
+                    model, mon.track(val_loader, "val eval"), device, species_map, toxicity_map,
+                    species_to_genus, genus_names, train_species_counts, eval_config,
+                )
 
-            log_epoch_metrics(epoch, epoch_metrics)
+                current_lr = optimizer.param_groups[0]["lr"]  # at the end of the epoch
+                epoch_metrics = {
+                    "train_loss": train_loss,
+                    "val_loss": val_loss,
+                    "lr": current_lr,
+                    "val_macro_f1": eval_report["primary_metrics"]["macro_f1"],
+                    "val_top_1_accuracy": eval_report["primary_metrics"]["top_1_accuracy"],
+                    "val_top_5_accuracy": eval_report["primary_metrics"]["top_5_accuracy"],
+                    "val_ece": eval_report["calibration"]["ece"],
+                }
 
-            print(
-                f"Epoch {epoch}: train_loss={train_loss:.4f}  val_loss={val_loss:.4f}  "
-                f"macro_f1={eval_report['primary_metrics']['macro_f1']:.4f}  "
-                f"top1={eval_report['primary_metrics']['top_1_accuracy']:.4f}",
-                flush=True,
-            )
+                log_epoch_metrics(epoch, epoch_metrics)
 
-            save_checkpoint(model, optimizer, epoch, epoch_metrics, last_path)
-
-            should_stop = early_stopping.step(epoch_metrics, epoch)
-            if early_stopping.improved:
-                save_checkpoint(model, optimizer, epoch, epoch_metrics, best_path)
-
-            if should_stop:
                 print(
-                    f"Early stopping at epoch {epoch}. "
-                    f"Best {early_stopping.metric_name}={early_stopping.best_value:.4f} "
-                    f"at epoch {early_stopping.best_epoch}",
+                    f"Epoch {epoch}: train_loss={train_loss:.4f}  val_loss={val_loss:.4f}  "
+                    f"macro_f1={eval_report['primary_metrics']['macro_f1']:.4f}  "
+                    f"top1={eval_report['primary_metrics']['top_1_accuracy']:.4f}",
                     flush=True,
                 )
-                break
 
-        if best_path.exists():
-            checkpoint = torch.load(best_path, weights_only=True)
-            model.load_state_dict(checkpoint["model_state_dict"])
-            final_report, predictions = evaluate_model(
-                model, val_loader, device, species_map, toxicity_map,
-                species_to_genus, genus_names, train_species_counts, eval_config,
-                return_predictions=True,
-            )
-            (run_dir / "eval_report.json").write_text(
-                json.dumps(final_report, indent=2, default=str)
-            )
-            log_evaluation_report(final_report)
-            table, obs_probs = predictions_table(
-                predictions, species_map, species_to_genus, genus_names
-            )
-            table.to_parquet(run_dir / "val_predictions.parquet", index=False)
-            np.save(run_dir / "val_probs.npy", obs_probs)
-            mlflow.log_artifact(str(run_dir / "val_predictions.parquet"), artifact_path="predictions")
-            mlflow.log_artifact(str(run_dir / "val_probs.npy"), artifact_path="predictions")
-            if config.hub.push_best_checkpoint:
-                _push_best_checkpoint(run_dir, config, early_stopping, data_snapshot)
-            else:
-                log_model_checkpoint(best_path)
-                log_model_checkpoint(last_path)
+                mon.phase(f"epoch {epoch + 1}/{config.training.epochs} · checkpointing")
+                save_checkpoint(model, optimizer, epoch, epoch_metrics, last_path)
+
+                should_stop = early_stopping.step(epoch_metrics, epoch)
+                if early_stopping.improved:
+                    save_checkpoint(model, optimizer, epoch, epoch_metrics, best_path)
+                mon.end_epoch(epoch_metrics)
+
+                if should_stop:
+                    print(
+                        f"Early stopping at epoch {epoch}. "
+                        f"Best {early_stopping.metric_name}={early_stopping.best_value:.4f} "
+                        f"at epoch {early_stopping.best_epoch}",
+                        flush=True,
+                    )
+                    break
+
+            if best_path.exists():
+                mon.phase("final evaluation (best checkpoint)")
+                checkpoint = torch.load(best_path, weights_only=True)
+                model.load_state_dict(checkpoint["model_state_dict"])
+                final_report, predictions = evaluate_model(
+                    model, mon.track(val_loader, "final eval"), device, species_map, toxicity_map,
+                    species_to_genus, genus_names, train_species_counts, eval_config,
+                    return_predictions=True,
+                )
+                mon.phase("logging results")
+                (run_dir / "eval_report.json").write_text(
+                    json.dumps(final_report, indent=2, default=str)
+                )
+                log_evaluation_report(final_report)
+                table, obs_probs = predictions_table(
+                    predictions, species_map, species_to_genus, genus_names
+                )
+                table.to_parquet(run_dir / "val_predictions.parquet", index=False)
+                np.save(run_dir / "val_probs.npy", obs_probs)
+                mlflow.log_artifact(str(run_dir / "val_predictions.parquet"), artifact_path="predictions")
+                mlflow.log_artifact(str(run_dir / "val_probs.npy"), artifact_path="predictions")
+                mon.phase("uploading checkpoint")
+                if config.hub.push_best_checkpoint:
+                    _push_best_checkpoint(run_dir, config, early_stopping, data_snapshot)
+                else:
+                    log_model_checkpoint(best_path)
+                    log_model_checkpoint(last_path)
 
     finally:
-        mlflow.end_run()
+        mlflow.end_run()  # no-op when the monitor already ended the run with its status
         if watchdog:
             print(f"\nPeak memory during training: {watchdog.summary()}", flush=True)
             watchdog.stop()

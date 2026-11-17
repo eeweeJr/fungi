@@ -17,6 +17,7 @@ Hooks are attached only for the probe pass, so training steps pay nothing for th
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 import numpy as np
@@ -316,7 +317,8 @@ class Diagnostics:
         warnings = health_warnings(m, self.cfg)
         for name, msg in warnings.items():
             if self.warnings.get(name) != msg:
-                print(f"  [health] {name}: {msg}", flush=True)
+                # A warning, not a print, so the run monitor counts it and shows it in MLflow.
+                logging.getLogger("fungai.health").warning("[health] %s: %s", name, msg)
                 self.tag_fn(f"health.{name}", msg)
         self.warnings.update(warnings)
         m["epoch"] = epoch

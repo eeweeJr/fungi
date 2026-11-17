@@ -1,0 +1,59 @@
+# E0: per-image baseline. ViT-B (ImageNet-21k, timm vit_base_patch16_224) at 224 px on the
+# 300p images, 10 epochs, with the fixed training loop. Replaces fungai-dev_v0.2.
+# Differs from default.yaml only in: training.epochs, notes.
+# Run:  uv run python -m fungai.model.train --config configs/e0_image_baseline.yaml
+seed: 42
+
+experiment_name: "fungai-dev"
+run_name: null
+notes: "E0 per-image baseline: ViT-B 224px, 10 epochs, fixed loop; replaces fungai-dev_v0.2"
+
+data:
+  dataset: fungitastic
+  subset: mini
+  size: "300"
+  image_size: 224
+  batch_size: 32
+  num_workers: 0
+  pin_memory: false
+  augmentation: true
+  protocol: open          # open: hold species out as unknowns | closed: 210-class benchmark
+  split_seed: 42          # fixes which species are held out
+  n_holdout_species: 30
+  n_holdout_toxic: 2
+  sampler: sqrt           # none | observation | sqrt | balanced
+
+model:
+  backbone: vit_base_patch16_224
+  pretrained: true
+  dropout: 0.1
+  num_classes: 210
+
+training:
+  lr: 1.0e-4
+  weight_decay: 0.01
+  epochs: 10
+  warmup_epochs: 1
+  scheduler: cosine
+  grad_clip_norm: 1.0
+  early_stopping_patience: 5
+  early_stopping_metric: val_macro_f1
+  cost_sensitive: false
+  label_smoothing: 0.0
+
+evaluation:
+  primary_metric: macro_f1
+  top_k: [1, 5]
+  ece_n_bins: 15
+  coverage_steps: 20
+  failure_gallery_n: 50
+  aggregate_observations: true
+
+safety:
+  memory_limit_gb: 16.0
+  memory_poll_interval_s: 2.0
+  preflight_enabled: true
+
+hub:
+  push_best_checkpoint: true   # true: upload best.pth to the private repo below after training
+  repo_id: eewee/fungai-checkpoints                 # e.g. your-username/fungai-checkpoints

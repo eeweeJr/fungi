@@ -54,6 +54,13 @@ class MemoryWatchdog:
         self._peak_rss_bytes: int = 0
         self._peak_gpu_bytes: int = 0
         self._proc = psutil.Process(os.getpid())
+        self._on_limit: list = []
+
+    def add_on_limit(self, callback) -> None:
+        """callback(message) runs on the watchdog thread just before the SIGKILL, e.g. to
+        record the kill in MLflow. It must be quick; any exception it raises is ignored."""
+        if callback not in self._on_limit:
+            self._on_limit.append(callback)
 
     def _get_total_rss(self) -> int:
         try:
@@ -82,12 +89,17 @@ class MemoryWatchdog:
         while not self._stop_event.is_set():
             rss, gpu = self.sample()
             if rss + gpu > self.limit_bytes:
-                logger.critical(
-                    "MEMORY LIMIT EXCEEDED: %.2f GB (process %.2f GB + GPU %.2f GB) > %.2f GB "
-                    "limit. Killing process.",
-                    (rss + gpu) / 1024**3, rss / 1024**3, gpu / 1024**3,
-                    self.limit_bytes / 1024**3,
+                message = (
+                    f"MEMORY LIMIT EXCEEDED: {(rss + gpu) / 1024**3:.2f} GB (process "
+                    f"{rss / 1024**3:.2f} GB + GPU {gpu / 1024**3:.2f} GB) > "
+                    f"{self.limit_bytes / 1024**3:.2f} GB limit. Killing process."
                 )
+                logger.critical(message)
+                for callback in self._on_limit:
+                    try:
+                        callback(message)
+                    except Exception:  # noqa: BLE001, S110 - the kill must happen regardless
+                        pass
                 os.kill(os.getpid(), signal.SIGKILL)
             self._stop_event.wait(self.poll_interval)
 

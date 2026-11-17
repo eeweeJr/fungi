@@ -284,8 +284,9 @@ def _batch_to(batch: dict, device) -> tuple:
 
 
 def train_one_epoch(model, loader, optimizer, scheduler, cfg, device, step: int,
-                    diagnostics=None) -> tuple[dict, int]:
-    """One epoch with gradient accumulation. Returns (mean loss terms, global step)."""
+                    diagnostics=None, monitor=None) -> tuple[dict, int]:
+    """One epoch with gradient accumulation. Returns (mean loss terms, global step).
+    `monitor` (a RunMonitor) receives each batch's total loss for the live running loss."""
     t = cfg.training
     model.train()
     accum = t.accum_steps
@@ -303,9 +304,12 @@ def train_one_epoch(model, loader, optimizer, scheduler, cfg, device, step: int,
                                      cfg.model.photo_loss_weight)
         (parts["total"] / accum).backward()
         b = len(label)
-        for k, v in parts.items():
-            sums[k] = sums.get(k, 0.0) + float(v.detach()) * b
+        values = {k: float(v.detach()) for k, v in parts.items()}
+        for k, v in values.items():
+            sums[k] = sums.get(k, 0.0) + v * b
         n += b
+        if monitor is not None:
+            monitor.record_loss(values["total"])
         if (i + 1) % accum and (i + 1) != n_batches:
             continue
         log_now = diagnostics is not None and diagnostics.is_log_step(step)
@@ -377,132 +381,148 @@ def train(cfg: ExperimentConfig, limit: int | None = None) -> Path:
         log_evaluation_report,
         start_tracked_run,
     )
+    from fungai.tracking.monitor import RunMonitor
 
     seed_everything(cfg.seed)
     device = pick_device()
-    data = build_data(cfg, limit)
-    print(f"Data snapshot: {data['snapshot_dir'].name}  |  "
-          f"train obs {len(data['train_ds'])}  val obs {len(data['val_ds'])} "
-          f"(val truncated by cap: {data['val_ds'].n_truncated})", flush=True)
-
-    model = build_observation_model(cfg, data["species_genus"], len(data["genus_names"])).to(device)
-    steps_per_epoch = math.ceil(len(data["train_loader"]) / cfg.training.accum_steps)
-    optimizer = build_optimizer(model, cfg)
-    scheduler = build_observation_scheduler(optimizer, cfg, steps_per_epoch)
-
-    toxicity_map = _build_toxicity_map(data["species_map"], data["train_df"])
-    species_to_genus = _build_species_to_genus(data["species_map"], data["train_df"])
-    train_species_counts = _build_train_species_counts(data["train_df"], data["species_map"])
-    try:
-        presence = load_part_presence("val")
-    except FileNotFoundError:
-        presence = None
-
-    watchdog = None
-    if cfg.safety.preflight_enabled:
-        mem = measure_step_memory(model, cfg, device)
-
-        def step_fn(batch):
-            images, mask, label, genus_label = _batch_to(batch, device)
-            out = model(images, mask)
-            return observation_loss(out, label, genus_label, model.head_kind, model.fusion_kind,
-                                    cfg.model.photo_loss_weight)["total"]
-
-        watchdog = run_preflight(cfg, model, data["train_loader"], optimizer, None, device,
-                                 memory_estimate=mem, step_fn=step_fn,
-                                 steps_per_epoch=len(data["train_loader"]))
-
-    if cfg.training.freeze_epochs > 0:
-        model.freeze_backbone(True)
-
     version = _next_version(cfg.experiment_name)
     run_dir = OUTPUTS_DIR / version
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "config.yaml").write_text(yaml.dump(config_to_flat_dict(cfg), default_flow_style=False))
-    (run_dir / "observation_shape.json").write_text(json.dumps(data["observation_shape"], indent=1))
     best_path, last_path = run_dir / "best.pth", run_dir / "last.pth"
     print(f"Run: {version}  ->  {run_dir}", flush=True)
 
+    # The run starts before anything that can fail, so data, preflight and training
+    # errors all end up in MLflow (see fungai.tracking.monitor).
     start_tracked_run(cfg, run_name=version)
-    log_data_snapshot(data["snapshot_dir"])
-    mlflow.log_artifact(str(run_dir / "observation_shape.json"), artifact_path="data")
     mlflow.set_tag("arch", "observation")
     mlflow.set_tag("device", device.type)
     if limit:
         mlflow.set_tag("limit_observations", str(limit))
         mlflow.set_tag("note", "pipeline check on a subset; not a result")
 
-    diagnostics = None
-    if cfg.diagnostics.enabled:
-        probe = build_probe_batch(cfg, data, presence)
-        grids = build_part_grids(probe, cfg, model.backbone.patch_size) if (
-            cfg.diagnostics.part_attention and presence is not None) else {}
-        diagnostics = Diagnostics(model, cfg.diagnostics, probe, run_dir, device, data["mean"], data["std"],
-                                  part_grids=grids)
-        diagnostics.capture_initial()
-
-    early = EarlyStopping(cfg.training.early_stopping_patience, cfg.training.early_stopping_metric)
-    step = 0
+    watchdog = None
     try:
-        for epoch in range(cfg.training.epochs):
-            if epoch == cfg.training.freeze_epochs and model.backbone_frozen:
-                model.freeze_backbone(False)
-                print(f"Epoch {epoch}: backbone unfrozen", flush=True)
-            t0 = time.time()
-            train_loss, step = train_one_epoch(model, data["train_loader"], optimizer, scheduler, cfg,
-                                               device, step, diagnostics)
-            val, _ = evaluate(model, data, cfg, device, toxicity_map, species_to_genus,
-                              train_species_counts)
-            metrics = {f"train_{k}": v for k, v in train_loss.items()} | val | {
-                "epoch_time_s": time.time() - t0, "backbone_frozen": float(model.backbone_frozen)}
-            if watchdog is not None:
-                metrics["peak_memory_gb"] = watchdog.peak_gb
-            log_epoch_metrics(epoch, metrics)
-            if diagnostics is not None:
-                diagnostics.on_epoch_end(epoch, step)
-            print(f"Epoch {epoch}: train_loss={train_loss['total']:.4f} val_loss={val['val_loss']:.4f} "
-                  f"macro_f1={val['val_macro_f1']:.4f} (photo-avg {val['val_photo_avg_macro_f1']:.4f}) "
-                  f"top1={val['val_top_1_accuracy']:.4f} genus={val['val_genus_head_accuracy']:.4f} "
-                  f"[{metrics['epoch_time_s'] / 60:.1f} min]", flush=True)
-            save_checkpoint(model, optimizer, epoch, metrics, last_path)
-            stop = early.step(metrics, epoch)
-            if early.improved:
-                save_checkpoint(model, optimizer, epoch, metrics, best_path)
-            if stop:
-                print(f"Early stopping at epoch {epoch}; best {early.metric_name}="
-                      f"{early.best_value:.4f} at epoch {early.best_epoch}", flush=True)
-                break
+        with RunMonitor(run_dir, cfg.training.epochs, memory_limit_gb=cfg.safety.memory_limit_gb) as mon:
+            mon.phase("loading data")
+            data = build_data(cfg, limit)
+            print(f"Data snapshot: {data['snapshot_dir'].name}  |  "
+                  f"train obs {len(data['train_ds'])}  val obs {len(data['val_ds'])} "
+                  f"(val truncated by cap: {data['val_ds'].n_truncated})", flush=True)
+            log_data_snapshot(data["snapshot_dir"])
+            (run_dir / "observation_shape.json").write_text(json.dumps(data["observation_shape"], indent=1))
+            mlflow.log_artifact(str(run_dir / "observation_shape.json"), artifact_path="data")
 
-        ckpt = torch.load(best_path, weights_only=True, map_location=device)
-        model.load_state_dict(ckpt["model_state_dict"])
-        report, pred, fitted = evaluate(model, data, cfg, device, toxicity_map, species_to_genus,
-                                        train_species_counts, presence, full=True)
-        report["best_epoch"] = early.best_epoch
-        if diagnostics is not None:
-            report["health_warnings"] = diagnostics.warnings
-        (run_dir / "eval_report.json").write_text(json.dumps(report, indent=2, default=str))
-        (run_dir / "calibration.json").write_text(json.dumps(fitted["calibration"], indent=2))
-        log_evaluation_report(report)
-        mlflow.log_artifact(str(run_dir / "calibration.json"), artifact_path="evaluation")
-        mlflow.log_metrics({k: float(v) for k, v in {
-            "final_val_macro_f1": report["primary_metrics"]["macro_f1"],
-            "final_val_top_1_accuracy": report["primary_metrics"]["top_1_accuracy"],
-            "final_val_photo_avg_macro_f1": report["fusion"]["photo_average"]["macro_f1"],
-            "final_val_ece_after_temperature": report["calibration_fit"]["ece_after"],
-            "best_epoch": early.best_epoch,
-        }.items() if v is not None})
-        table, probs = predictions_table(pred, data["species_map"], species_to_genus, data["genus_names"])
-        inv = {v: k for k, v in data["species_map"].items()}
-        table = observation_predictions_table(table, pred, fitted["per_observation"],
-                                              data["genus_names"], inv)
-        table.to_parquet(run_dir / "val_predictions.parquet", index=False)
-        np.save(run_dir / "val_probs.npy", probs)
-        mlflow.log_artifact(str(run_dir / "val_predictions.parquet"), artifact_path="predictions")
-        if diagnostics is not None:
-            mlflow.log_artifacts(str(run_dir / "diagnostics"), artifact_path="diagnostics")
-        _print_summary(report)
+            mon.phase("building model")
+            model = build_observation_model(cfg, data["species_genus"], len(data["genus_names"])).to(device)
+            steps_per_epoch = math.ceil(len(data["train_loader"]) / cfg.training.accum_steps)
+            optimizer = build_optimizer(model, cfg)
+            scheduler = build_observation_scheduler(optimizer, cfg, steps_per_epoch)
+
+            toxicity_map = _build_toxicity_map(data["species_map"], data["train_df"])
+            species_to_genus = _build_species_to_genus(data["species_map"], data["train_df"])
+            train_species_counts = _build_train_species_counts(data["train_df"], data["species_map"])
+            try:
+                presence = load_part_presence("val")
+            except FileNotFoundError:
+                presence = None
+
+            if cfg.safety.preflight_enabled:
+                mon.phase("preflight")
+                mem = measure_step_memory(model, cfg, device)
+
+                def step_fn(batch):
+                    images, mask, label, genus_label = _batch_to(batch, device)
+                    out = model(images, mask)
+                    return observation_loss(out, label, genus_label, model.head_kind, model.fusion_kind,
+                                            cfg.model.photo_loss_weight)["total"]
+
+                watchdog = run_preflight(cfg, model, data["train_loader"], optimizer, None, device,
+                                         memory_estimate=mem, step_fn=step_fn,
+                                         steps_per_epoch=len(data["train_loader"]))
+                mon.attach_watchdog(watchdog)
+
+            if cfg.training.freeze_epochs > 0:
+                model.freeze_backbone(True)
+
+            diagnostics = None
+            if cfg.diagnostics.enabled:
+                mon.phase("diagnostics setup")
+                probe = build_probe_batch(cfg, data, presence)
+                grids = build_part_grids(probe, cfg, model.backbone.patch_size) if (
+                    cfg.diagnostics.part_attention and presence is not None) else {}
+                diagnostics = Diagnostics(model, cfg.diagnostics, probe, run_dir, device, data["mean"],
+                                          data["std"], part_grids=grids)
+                diagnostics.capture_initial()
+
+            early = EarlyStopping(cfg.training.early_stopping_patience, cfg.training.early_stopping_metric)
+            step = 0
+            for epoch in range(cfg.training.epochs):
+                mon.start_epoch(epoch)
+                if epoch == cfg.training.freeze_epochs and model.backbone_frozen:
+                    model.freeze_backbone(False)
+                    print(f"Epoch {epoch}: backbone unfrozen", flush=True)
+                t0 = time.time()
+                train_loss, step = train_one_epoch(model, mon.track(data["train_loader"], "train"),
+                                                   optimizer, scheduler, cfg, device, step, diagnostics,
+                                                   monitor=mon)
+                val, _ = evaluate(model, {**data, "val_loader": mon.track(data["val_loader"], "val")},
+                                  cfg, device, toxicity_map, species_to_genus, train_species_counts)
+                metrics = {f"train_{k}": v for k, v in train_loss.items()} | val | {
+                    "epoch_time_s": time.time() - t0, "backbone_frozen": float(model.backbone_frozen)}
+                if watchdog is not None:
+                    metrics["peak_memory_gb"] = watchdog.peak_gb
+                log_epoch_metrics(epoch, metrics)
+                if diagnostics is not None:
+                    diagnostics.on_epoch_end(epoch, step)
+                print(f"Epoch {epoch}: train_loss={train_loss['total']:.4f} val_loss={val['val_loss']:.4f} "
+                      f"macro_f1={val['val_macro_f1']:.4f} (photo-avg {val['val_photo_avg_macro_f1']:.4f}) "
+                      f"top1={val['val_top_1_accuracy']:.4f} genus={val['val_genus_head_accuracy']:.4f} "
+                      f"[{metrics['epoch_time_s'] / 60:.1f} min]", flush=True)
+                mon.phase(f"epoch {epoch + 1}/{cfg.training.epochs} · checkpointing")
+                save_checkpoint(model, optimizer, epoch, metrics, last_path)
+                stop = early.step(metrics, epoch)
+                if early.improved:
+                    save_checkpoint(model, optimizer, epoch, metrics, best_path)
+                mon.end_epoch(metrics)
+                if stop:
+                    print(f"Early stopping at epoch {epoch}; best {early.metric_name}="
+                          f"{early.best_value:.4f} at epoch {early.best_epoch}", flush=True)
+                    break
+
+            mon.phase("final evaluation (best checkpoint)")
+            ckpt = torch.load(best_path, weights_only=True, map_location=device)
+            model.load_state_dict(ckpt["model_state_dict"])
+            report, pred, fitted = evaluate(
+                model, {**data, "val_loader": mon.track(data["val_loader"], "final eval")}, cfg, device,
+                toxicity_map, species_to_genus, train_species_counts, presence, full=True)
+            report["best_epoch"] = early.best_epoch
+            if diagnostics is not None:
+                report["health_warnings"] = diagnostics.warnings
+            mon.phase("logging results")
+            (run_dir / "eval_report.json").write_text(json.dumps(report, indent=2, default=str))
+            (run_dir / "calibration.json").write_text(json.dumps(fitted["calibration"], indent=2))
+            log_evaluation_report(report)
+            mlflow.log_artifact(str(run_dir / "calibration.json"), artifact_path="evaluation")
+            mlflow.log_metrics({k: float(v) for k, v in {
+                "final_val_macro_f1": report["primary_metrics"]["macro_f1"],
+                "final_val_top_1_accuracy": report["primary_metrics"]["top_1_accuracy"],
+                "final_val_photo_avg_macro_f1": report["fusion"]["photo_average"]["macro_f1"],
+                "final_val_ece_after_temperature": report["calibration_fit"]["ece_after"],
+                "best_epoch": early.best_epoch,
+            }.items() if v is not None})
+            table, probs = predictions_table(pred, data["species_map"], species_to_genus, data["genus_names"])
+            inv = {v: k for k, v in data["species_map"].items()}
+            table = observation_predictions_table(table, pred, fitted["per_observation"],
+                                                  data["genus_names"], inv)
+            table.to_parquet(run_dir / "val_predictions.parquet", index=False)
+            np.save(run_dir / "val_probs.npy", probs)
+            mlflow.log_artifact(str(run_dir / "val_predictions.parquet"), artifact_path="predictions")
+            if diagnostics is not None:
+                mlflow.log_artifacts(str(run_dir / "diagnostics"), artifact_path="diagnostics")
+            _print_summary(report)
     finally:
-        mlflow.end_run()
+        mlflow.end_run()  # no-op when the monitor already ended the run with its status
         if watchdog is not None:
             print(f"\nPeak memory during training: {watchdog.summary()}", flush=True)
             watchdog.stop()

@@ -47,14 +47,28 @@ def get_git_hash() -> str:
         return "unknown"
 
 
-def start_tracked_run(config: ExperimentConfig, run_name: str | None = None):
+SYSTEM_METRICS_INTERVAL_S = 10
+
+
+def start_monitored_run(run_name: str, experiment_id: str | None = None,
+                        system_metrics: bool = True, **kwargs):
+    """mlflow.start_run with MLflow's system metrics on (system/*: CPU, RAM, disk,
+    network, sampled every 10 s). Its thread stops when the run ends."""
+    if system_metrics:
+        mlflow.set_system_metrics_sampling_interval(SYSTEM_METRICS_INTERVAL_S)
+    return mlflow.start_run(run_name=run_name, experiment_id=experiment_id,
+                            log_system_metrics=system_metrics, **kwargs)
+
+
+def start_tracked_run(config: ExperimentConfig, run_name: str | None = None,
+                      system_metrics: bool = True):
     """Set up experiment, start MLflow run, log flattened params + git hash + config artifact."""
     setup_experiment(config.experiment_name)
 
     run_name = run_name or config.run_name or (
         f"{config.model.backbone}_bs{config.data.batch_size}"
     )
-    run = mlflow.start_run(run_name=run_name)
+    run = start_monitored_run(run_name, system_metrics=system_metrics)
 
     flat = config_to_flat_dict(config)
     for k, v in flat.items():
@@ -98,7 +112,7 @@ def log_data_snapshot(snapshot_dir: Path) -> None:
                 df, source=str(file.resolve()), name=f"{manifest['id']}/{split}",
                 digest=summary["digest"][:20],
             )
-        mlflow.log_input(dataset, context=split)
+            mlflow.log_input(dataset, context=split)
     mlflow.log_artifact(str(Path(snapshot_dir) / "manifest.json"), artifact_path="data")
 
 
