@@ -1,5 +1,11 @@
+# fungai
+
+Mushroom identification from photos and context.
+
 <p align="center">
-  <img src="docs/assets/banner.svg" alt="fungai: mushroom identification that knows when it isn't sure" width="100%">
+  <img src="docs/assets/banner.jpg" alt="Six mushroom photos from the FungiTastic dataset" width="100%">
+  <br>
+  <sub><i>Amanita muscaria · Boletus edulis · Russula emetica · Mycena haematopus · Agaricus campestris · Clitocybe nebularis</i></sub>
 </p>
 
 <p align="center">
@@ -55,4 +61,5 @@ uv run mlflow ui --backend-store-uri sqlite:///mlflow.db --port 5000
 
 ---
 
-<p align="center"><sub>Personal research project. Never eat a wild mushroom on the strength of an app, this one included.</sub></p>
+<p align="center"><sub>Personal research project. Never eat a wild mushroom on the strength of an app, this one included.<br>
+Photos: Atlas of Danish Fungi contributors, via <a href="https://arxiv.org/abs/2408.13632">FungiTastic</a> (CC BY-NC 4.0).</sub></p>
