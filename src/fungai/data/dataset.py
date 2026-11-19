@@ -32,23 +32,70 @@ CATEGORICAL_META = ("habitat", "substrate", "biogeo_zone", "land_cover", "toxici
 CONTINUOUS_META = ("latitude", "longitude", "elevation", "month")
 
 
-def build_train_transform(image_size: int = 224) -> transforms.Compose:
-    return transforms.Compose([
-        transforms.RandomResizedCrop(image_size, scale=(0.8, 1.0)),
+COLOR_AUGS = ("full", "brightness_contrast", "none")
+
+
+def backbone_normalization(backbone: str) -> tuple[tuple[float, ...], tuple[float, ...]]:
+    """(mean, std) the backbone's pretrained weights expect, from timm's config.
+
+    Falls back to ImageNet statistics for names timm does not know. Note that
+    `vit_base_patch16_224` expects (0.5, 0.5, 0.5), not ImageNet statistics.
+    """
+    import timm
+
+    try:
+        cfg = timm.models.get_pretrained_cfg(backbone)
+    except Exception:  # noqa: BLE001 - unknown or custom name
+        cfg = None
+    if cfg is None or cfg.mean is None or cfg.std is None:
+        return IMAGENET_MEAN, IMAGENET_STD
+    return tuple(cfg.mean), tuple(cfg.std)
+
+
+def build_train_transform(
+    image_size: int = 224,
+    crop_scale_min: float = 0.8,
+    color_aug: str = "full",
+    mean: tuple[float, ...] = IMAGENET_MEAN,
+    std: tuple[float, ...] = IMAGENET_STD,
+) -> transforms.Compose:
+    """Training augmentation. Defaults reproduce the original transform.
+
+    color_aug: full = brightness, contrast, saturation and hue jitter;
+    brightness_contrast = no saturation or hue change (cap and gill colour are
+    diagnostic); none = no colour jitter.
+    """
+    if color_aug not in COLOR_AUGS:
+        raise ValueError(f"color_aug must be one of {COLOR_AUGS}, got {color_aug!r}")
+    steps = [
+        transforms.RandomResizedCrop(image_size, scale=(crop_scale_min, 1.0)),
         transforms.RandomHorizontalFlip(),
-        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.05),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
-    ])
+    ]
+    if color_aug == "full":
+        steps.append(transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.05))
+    elif color_aug == "brightness_contrast":
+        steps.append(transforms.ColorJitter(brightness=0.2, contrast=0.2))
+    steps += [transforms.ToTensor(), transforms.Normalize(mean=mean, std=std)]
+    return transforms.Compose(steps)
 
 
-def build_eval_transform(image_size: int = 224) -> transforms.Compose:
+def build_eval_transform(
+    image_size: int = 224,
+    mean: tuple[float, ...] = IMAGENET_MEAN,
+    std: tuple[float, ...] = IMAGENET_STD,
+) -> transforms.Compose:
+    """Resize the shorter side to image_size * 256/224, then centre-crop."""
     return transforms.Compose([
-        transforms.Resize(int(image_size * 256 / 224)),
+        transforms.Resize(eval_resize_size(image_size)),
         transforms.CenterCrop(image_size),
         transforms.ToTensor(),
-        transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+        transforms.Normalize(mean=mean, std=std),
     ])
+
+
+def eval_resize_size(image_size: int) -> int:
+    """Shorter-side length the eval transform resizes to before centre-cropping."""
+    return int(image_size * 256 / 224)
 
 
 @dataclass
@@ -183,68 +230,121 @@ class FungiDataset(Dataset):
 
 
 class ObservationDataset(Dataset):
-    """Groups images by observation_id for multi-image aggregation at eval time."""
+    """One item per observation: up to `max_photos` photos of the same mushroom.
+
+    train=True draws k photos uniformly from 1..min(n, max_photos), without
+    replacement and in random order, so the model sees every photo count and never
+    learns an order. train=False uses `select_eval_photos`: a deterministic first
+    `max_photos` by filename, the same set the per-image baseline is scored on.
+    max_photos=None keeps every photo (original behaviour).
+
+    Photos carry no view labels and no position information.
+    """
 
     def __init__(
         self,
         metadata: pd.DataFrame,
         transform: transforms.Compose | None = None,
         label_map: dict[str, int] | None = None,
+        genus_map: dict[str, int] | None = None,
+        max_photos: int | None = None,
+        train: bool = False,
+        seed: int = 0,
     ):
+        from fungai.data.observations import ObservationIndex, select_eval_photos
+
         if "observation_id" not in metadata.columns:
             raise KeyError("needs observation_id for observation-level grouping")
         if "image_path" not in metadata.columns:
             raise KeyError("metadata needs an 'image_path' column")
+        if "filename" not in metadata.columns:
+            metadata = metadata.assign(filename=metadata["image_path"].map(lambda p: Path(p).name))
+        self.n_photos_available = len(metadata)
+        self.n_truncated = 0
+        if not train and max_photos is not None:
+            per_obs = metadata.groupby("observation_id").size()
+            self.n_truncated = int((per_obs > max_photos).sum())
+            metadata = select_eval_photos(metadata, max_photos)
         self.metadata = metadata.reset_index(drop=True)
         self.transform = transform or DEFAULT_TRANSFORM
         self.label_map = label_map or {}
-        self._groups = metadata.groupby("observation_id")
-        self._obs_ids = list(self._groups.groups.keys())
+        self.genus_map = genus_map
+        self.max_photos = max_photos
+        self.train = train
+        self._rng = np.random.default_rng(seed)
+        self._index = ObservationIndex(self.metadata)
+
+        self.observation_ids = [str(o) for o in self._index.observation_ids]
+        first_rows = self._index.order[self._index.starts]
+        self.observation_species = self.metadata["species"].astype(object).to_numpy()[first_rows]
+        self._paths = self.metadata["image_path"].astype(str).to_numpy()
+        self._has_revisited = "revisited_site" in self.metadata.columns
+        self._genus = (self.metadata["genus"].astype(object).to_numpy()
+                       if "genus" in self.metadata.columns else None)
 
     def __len__(self) -> int:
-        return len(self._obs_ids)
+        return len(self._index)
+
+    def photo_rows(self, idx: int) -> np.ndarray:
+        """Row positions of the photos used for this item (random in train mode)."""
+        rows = self._index.rows(idx)
+        if not self.train:
+            return rows
+        cap = len(rows) if self.max_photos is None else min(len(rows), self.max_photos)
+        k = int(self._rng.integers(1, cap + 1))
+        return self._rng.choice(rows, size=k, replace=False)
 
     def __getitem__(self, idx: int) -> dict:
-        obs_id = self._obs_ids[idx]
-        rows = self._groups.get_group(obs_id)
-        images = []
-        for _, row in rows.iterrows():
-            img = Image.open(row["image_path"]).convert("RGB")
-            images.append(self.transform(img))
-        first = rows.iloc[0]
+        rows = self.photo_rows(idx)
+        images = [self.transform(Image.open(self._paths[r]).convert("RGB")) for r in rows]
+        first = self.metadata.iloc[int(self._index.rows(idx)[0])]
         species = first.get("species")
         label = self.label_map.get(species, -1)
         meta = {k: first[k] for k in METADATA_FIELDS if k in first.index}
-        return {
+        item = {
             "images": images,
             "label": label,
             "species": species,
             "metadata": meta,
-            "observation_id": str(obs_id),
+            "observation_id": self.observation_ids[idx],
             "n_images": len(images),
+            "image_paths": [self._paths[r] for r in rows],
         }
+        if self.genus_map is not None and self._genus is not None:
+            item["genus_label"] = self.genus_map.get(self._genus[rows[0]], -1)
+        if self._has_revisited:
+            item["revisited_site"] = bool(first["revisited_site"])
+        return item
 
 
 def collate_observations(batch: list[dict]) -> dict:
-    """Custom collate for ObservationDataset — pads variable-length image lists."""
+    """Pad variable-length photo lists into the observation batch contract.
+
+    images [B, P, 3, H, W] zero-padded, image_mask [B, P] (True = real photo),
+    label [B], n_images [B], observation_id list, plus genus_label [B],
+    image_paths list[list[str]] and revisited_site [B] when the items carry them.
+    """
     max_imgs = max(b["n_images"] for b in batch)
     c, h, w = batch[0]["images"][0].shape
 
     padded = torch.zeros(len(batch), max_imgs, c, h, w)
     mask = torch.zeros(len(batch), max_imgs, dtype=torch.bool)
-    labels = []
-    obs_ids = []
-
     for i, b in enumerate(batch):
         for j, img in enumerate(b["images"]):
             padded[i, j] = img
             mask[i, j] = True
-        labels.append(b["label"])
-        obs_ids.append(b["observation_id"])
 
-    return {
+    out = {
         "images": padded,
         "image_mask": mask,
-        "label": torch.tensor(labels, dtype=torch.long),
-        "observation_id": obs_ids,
+        "label": torch.tensor([b["label"] for b in batch], dtype=torch.long),
+        "n_images": torch.tensor([b["n_images"] for b in batch], dtype=torch.long),
+        "observation_id": [b["observation_id"] for b in batch],
     }
+    if all("genus_label" in b for b in batch):
+        out["genus_label"] = torch.tensor([b["genus_label"] for b in batch], dtype=torch.long)
+    if all("image_paths" in b for b in batch):
+        out["image_paths"] = [b["image_paths"] for b in batch]
+    if all("revisited_site" in b for b in batch):
+        out["revisited_site"] = torch.tensor([b["revisited_site"] for b in batch], dtype=torch.bool)
+    return out

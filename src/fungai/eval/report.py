@@ -20,6 +20,7 @@ from fungai.eval.calibration import (
 from fungai.eval.cost_matrix import toxic_edible_misclassifications
 from fungai.eval.gallery import build_failure_gallery
 from fungai.eval.metrics import (
+    bootstrap_ci,
     error_decomposition,
     genus_accuracy,
     genus_confusion_matrix,
@@ -228,6 +229,22 @@ def build_evaluation_report(
             "unknown": genus_accuracy(genus_true[~closed_mask], g_probs[~closed_mask], genus_names),
         }
 
+    # --- Bootstrap intervals over observations (only when asked: the final evaluation) ---
+    intervals = None
+    n_boot = eval_config.get("bootstrap_samples")
+    if n_boot:
+        seed = eval_config.get("bootstrap_seed", 0)
+        ki = np.flatnonzero(closed_mask)
+        yk, pk, probk = obs_labels[ki], preds[ki], obs_probs[ki]
+        intervals = {
+            "macro_f1": bootstrap_ci(lambda i: macro_f1(yk[i], pk[i]), len(ki), n_boot, seed,
+                                     strata=yk),
+            "top_1_accuracy": bootstrap_ci(lambda i: float((yk[i] == pk[i]).mean()), len(ki), n_boot,
+                                           seed, strata=yk),
+            "top_5_accuracy": bootstrap_ci(lambda i: top_k_accuracy(yk[i], probk[i], k=5), len(ki),
+                                           n_boot, seed, strata=yk),
+        }
+
     gallery_n = eval_config.get("failure_gallery_n", 50)
     image_paths = per_observation("image_paths")
     image_paths = [""] * len(obs_labels) if image_paths is None else image_paths.tolist()
@@ -274,6 +291,8 @@ def build_evaluation_report(
             obs_probs, obs_labels, image_paths, species_names, n=gallery_n
         ),
     }
+    if intervals is not None:
+        report["intervals"] = intervals
     return report
 
 

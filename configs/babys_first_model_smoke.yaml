@@ -1,0 +1,107 @@
+# babys-first-model: smoke variant. Proves the pipeline on the 300p images already on disk.
+#
+# Not a result. Differs from babys_first_model.yaml only in: model.backbone,
+# data.size, data.image_size, data.batch_size, training.accum_steps, training.epochs,
+# training.freeze_epochs, notes.
+#
+# Run: uv run python -m fungai.model.train_observation --config configs/babys_first_model_smoke.yaml
+
+seed: 42
+experiment_name: "fungai-dev"  # one experiment for the whole project; runs differ by tags.config / model.arch
+run_name: null
+notes: "smoke: ViT-S/16 224px on 300p images, pipeline proof only"
+
+data:
+  dataset: fungitastic
+  subset: mini
+  size: "300"
+  image_size: 224
+  batch_size: 8                  # observations per step; worst case 8 x 4 = 32 photos at 224 px
+  num_workers: 0
+  pin_memory: false
+  augmentation: true
+  crop_scale_min: 0.5            # RandomResizedCrop lower bound; keeps at least half the frame
+  color_aug: brightness_contrast # no hue or saturation jitter: colour is diagnostic
+  max_photos: 4                  # cap per observation, train and eval
+  protocol: open
+  split_seed: 42
+  n_holdout_species: 30
+  n_holdout_toxic: 2
+  sampler: sqrt
+  split_gate: true               # abort if an observation-level split invariant fails
+
+model:
+  arch: observation
+  backbone: vit_small_patch16_dinov3.lvd1689m
+  pretrained: true
+  drop_path: 0.1
+  grad_checkpointing: false
+  dropout: 0.1                   # per-photo head
+  num_classes: 180               # overwritten at runtime from the protocol
+  fusion: perceiver              # none = per-photo head only
+  fusion_dim: 512
+  n_queries: 16
+  fusion_blocks: 2
+  fusion_heads: 8
+  fusion_dropout: 0.1
+  head: hierarchical             # flat = ablation
+  photo_loss_weight: 0.3
+
+training:
+  lr: 5.0e-4                     # new layers: fusion, heads
+  lr_backbone: 2.0e-5            # top backbone block
+  layer_decay: 0.75              # per block below the top
+  freeze_epochs: 1               # backbone frozen while the new layers settle
+  accum_steps: 2                 # effective batch = 8 x 2 = 16 observations
+  amp: true                      # CUDA only; ignored on MPS and CPU
+  weight_decay: 0.05
+  epochs: 3
+  warmup_epochs: 1
+  scheduler: cosine
+  grad_clip_norm: 1.0
+  early_stopping_patience: 5
+  early_stopping_metric: val_macro_f1
+  cost_sensitive: false
+  label_smoothing: 0.0           # smoothing flattens confidence and hurts rejection
+
+evaluation:
+  primary_metric: macro_f1
+  top_k: [1, 5]
+  ece_n_bins: 15
+  coverage_steps: 20
+  failure_gallery_n: 50
+  aggregate_observations: true
+  temperature_scaling: true
+  known_retention: 0.95          # sets the species and genus thresholds on val
+  bootstrap_samples: 1000
+  bootstrap_seed: 0
+  probe_backbones:               # frozen-feature scaling probe
+    - vit_small_patch16_dinov3.lvd1689m
+    - vit_base_patch16_dinov3.lvd1689m
+    - vit_large_patch16_dinov3.lvd1689m
+  probe_epochs: 50
+  probe_weight_decays: [0.0, 1.0e-4, 1.0e-2]
+
+diagnostics:
+  enabled: true
+  every_n_steps: 50
+  probe_observations: 32
+  probe_seed: 0
+  backbone_tap_every: 4
+  part_attention: true           # uses val masks, evaluation only
+  save_attention_figures: true
+  n_figure_observations: 8
+  alarm_query_cosine: 0.95
+  alarm_entropy_low: 0.05
+  alarm_entropy_high: 0.98
+  alarm_padding_mass: 1.0e-6
+  invariance_tolerance: 1.0e-4
+
+safety:
+  memory_limit_gb: 16.0
+  memory_poll_interval_s: 2.0
+  preflight_enabled: true
+
+hub:
+  push_best_checkpoint: false
+  repo_id: null

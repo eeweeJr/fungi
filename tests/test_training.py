@@ -5,7 +5,7 @@ import math
 import pytest
 import torch
 from torch import nn
-from torch.optim.lr_scheduler import SequentialLR
+from torch.optim.lr_scheduler import LambdaLR
 
 from fungai.config import ExperimentConfig
 from fungai.model.train import (
@@ -15,6 +15,7 @@ from fungai.model.train import (
     save_checkpoint,
     train_one_epoch,
     validate_one_epoch,
+    warmup_cosine_factor,
 )
 
 
@@ -82,8 +83,63 @@ def test_build_scheduler_cosine():
     cfg.training.scheduler = "cosine"
     cfg.training.warmup_epochs = 1
     cfg.training.epochs = 5
-    sched = build_scheduler(optimizer, cfg)
-    assert isinstance(sched, SequentialLR)
+    sched = build_scheduler(optimizer, cfg, steps_per_epoch=10)
+    assert isinstance(sched, LambdaLR)
+
+
+def test_warmup_is_per_step_so_a_one_epoch_run_reaches_full_lr():
+    """Regression: warmup used to step per epoch, so epoch 0 of every run trained at 1%
+    of the LR and a 1-epoch run never trained at all (fungai-dev_v0.2)."""
+    model = nn.Linear(10, 5)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+    cfg = ExperimentConfig()
+    cfg.training.epochs, cfg.training.warmup_epochs = 1, 1
+    steps = 100
+    sched = build_scheduler(optimizer, cfg, steps_per_epoch=steps)
+    lrs = []
+    for _ in range(steps):
+        lrs.append(optimizer.param_groups[0]["lr"])
+        optimizer.step()
+        sched.step()
+    assert lrs[0] == pytest.approx(1e-5)
+    assert max(lrs) > 0.9e-3
+
+
+def test_warmup_cosine_factor_shape():
+    total, warm = 100, 10
+    assert warmup_cosine_factor(0, total, warm) == pytest.approx(0.01)
+    assert warmup_cosine_factor(10, total, warm) == pytest.approx(1.0)
+    assert warmup_cosine_factor(55, total, warm) == pytest.approx(0.5)
+    assert warmup_cosine_factor(100, total, warm) == pytest.approx(0.0, abs=1e-9)
+    factors = [warmup_cosine_factor(i, total, warm) for i in range(10, 100)]
+    assert all(a >= b for a, b in zip(factors, factors[1:]))
+
+
+def test_scheduler_preserves_group_ratios():
+    a, b = nn.Linear(2, 2), nn.Linear(2, 2)
+    optimizer = torch.optim.AdamW([{"params": a.parameters(), "lr": 1e-3},
+                                   {"params": b.parameters(), "lr": 1e-5}])
+    cfg = ExperimentConfig()
+    cfg.training.epochs, cfg.training.warmup_epochs = 3, 1
+    sched = build_scheduler(optimizer, cfg, steps_per_epoch=7)
+    for _ in range(12):
+        optimizer.step()
+        sched.step()
+        g = optimizer.param_groups
+        assert g[0]["lr"] / g[1]["lr"] == pytest.approx(100.0)
+
+
+def test_early_stopping_improved_marks_the_epoch_to_save():
+    """Regression: best.pth was saved from the counter *before* step(), so it held the
+    previous epoch's verdict. With scores 0.3, 0.2, 0.5 it saved the 0.2 epoch."""
+    es = EarlyStopping(patience=5, metric_name="val_macro_f1")
+    saved = []
+    for epoch, score in enumerate([0.3, 0.2, 0.5, 0.4]):
+        es.step({"val_macro_f1": score}, epoch)
+        if es.improved:
+            saved.append(epoch)
+    assert saved == [0, 2]
+    assert es.best_epoch == 2
 
 
 def test_save_load_checkpoint(tiny_model, tmp_path):
@@ -104,6 +160,7 @@ def test_open_set_labels_excluded(tiny_model, dummy_dataloader):
     criterion = nn.CrossEntropyLoss()
     # Modify labels to be all open-set
     from torch.utils.data import DataLoader
+
     from tests.conftest import _DictDataset
 
     class AllOpenSet(_DictDataset):
@@ -122,3 +179,20 @@ def test_toxicity_map_int_encoding():
 
     df = pd.DataFrame({"species": ["a", "a", "b", "b"], "toxicity": [1, 1, 0, 0]})
     assert _build_toxicity_map({"a": 0, "b": 1}, df) == {"a": True, "b": False}
+
+
+def test_log_final_metrics_logs_values_and_intervals(tmp_path):
+    import mlflow
+
+    from fungai.model.train import log_final_metrics
+
+    mlflow.set_tracking_uri(f"sqlite:///{tmp_path / 'm.db'}")
+    mlflow.set_experiment("final-metrics-test")  # earlier tests leave another store's experiment active
+    report = {"primary_metrics": {"macro_f1": 0.57, "top_1_accuracy": 0.83, "top_5_accuracy": 0.96},
+              "calibration": {"ece": 0.05}, "best_epoch": 8,
+              "intervals": {"macro_f1": {"value": 0.57, "lo": 0.54, "hi": 0.58}}}
+    with mlflow.start_run() as run:
+        log_final_metrics(report)
+    m = mlflow.get_run(run.info.run_id).data.metrics
+    assert m["final_val_macro_f1"] == 0.57 and m["final_val_macro_f1_lo"] == 0.54
+    assert m["final_val_macro_f1_hi"] == 0.58 and m["best_epoch"] == 8

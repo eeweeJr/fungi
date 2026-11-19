@@ -69,10 +69,20 @@ def estimate_training_time(
     criterion: torch.nn.Module,
     device: torch.device,
     num_epochs: int,
+    step_fn=None,
+    steps_per_epoch: int | None = None,
 ) -> dict:
-    """Time a single forward+backward on one batch, extrapolate to full run."""
+    """Time a single forward+backward on one batch, extrapolate to full run.
+
+    step_fn(batch) -> loss replaces the default image-classifier step. With a
+    step_fn the optimizer is not stepped, so timing does not change the weights.
+    steps_per_epoch defaults to len(loader) (batches, not optimizer steps).
+    """
     model.train()
     batch = next(iter(loader))
+    if step_fn is not None:
+        return _time_custom_step(model, batch, step_fn, device, num_epochs,
+                                 steps_per_epoch or len(loader))
     images = batch["image"].to(device)
     labels = batch["label"].to(device)
 
@@ -109,6 +119,38 @@ def estimate_training_time(
         "total_time_s": round(total_time, 1),
         "total_time_human": _format_duration(total_time),
         "estimated_completion": completion.strftime("%Y-%m-%d %H:%M"),
+    }
+
+
+def _sync(device: torch.device) -> None:
+    if device.type == "mps":
+        torch.mps.synchronize()
+    elif device.type == "cuda":
+        torch.cuda.synchronize()
+
+
+def _time_custom_step(model, batch, step_fn, device, num_epochs, batches_per_epoch) -> dict:
+    for p in model.parameters():
+        p.grad = None
+    step_fn(batch).backward()  # warmup: MPS compiles kernels on first call
+    _sync(device)
+    for p in model.parameters():
+        p.grad = None
+    start = time.perf_counter()
+    step_fn(batch).backward()
+    _sync(device)
+    elapsed = time.perf_counter() - start
+    for p in model.parameters():
+        p.grad = None
+    epoch_time = elapsed * batches_per_epoch
+    total_time = epoch_time * num_epochs
+    return {
+        "batch_time_s": round(elapsed, 3),
+        "batches_per_epoch": batches_per_epoch,
+        "epoch_time_s": round(epoch_time, 1),
+        "total_time_s": round(total_time, 1),
+        "total_time_human": _format_duration(total_time),
+        "estimated_completion": (datetime.now() + timedelta(seconds=total_time)).strftime("%Y-%m-%d %H:%M"),
     }
 
 

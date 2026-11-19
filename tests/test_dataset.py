@@ -1,6 +1,5 @@
 """Tests for fungai.data.dataset — transforms, MetadataPreprocessor, ObservationDataset."""
 
-import numpy as np
 import pandas as pd
 import pytest
 import torch
@@ -136,3 +135,97 @@ def test_collate_observations():
     assert collated["image_mask"][0].all()
     assert collated["image_mask"][1, 0] and not collated["image_mask"][1, 1]
     assert collated["label"].shape == (2,)
+
+
+# --------------------------------------------------------------------------- #
+# Observation dataset, transforms and sampler (babys-first-model)
+# --------------------------------------------------------------------------- #
+
+from fungai.data.dataset import ObservationDataset, backbone_normalization
+from fungai.data.sampler import ObservationSampler, build_observation_sampler
+
+
+@pytest.fixture
+def obs_frame(tmp_path):
+    rows = []
+    counts = {101: 6, 102: 1, 103: 2, 104: 3, 105: 1, 106: 1}
+    species = {101: "sp_a", 102: "sp_a", 103: "sp_b", 104: "sp_b", 105: "sp_b", 106: "sp_c"}
+    for obs, n in counts.items():
+        for i in range(n):
+            path = tmp_path / f"{i}-{obs}.JPG"
+            Image.new("RGB", (40, 30), color=(i * 40 % 255, obs % 255, 0)).save(path)
+            rows.append({"observation_id": obs, "filename": path.name, "image_path": str(path),
+                         "species": species[obs], "genus": "G", "revisited_site": False})
+    return pd.DataFrame(rows).sample(frac=1, random_state=0).reset_index(drop=True)
+
+
+def _small_tf():
+    return build_eval_transform(32)
+
+
+def test_observation_dataset_eval_is_capped_and_deterministic(obs_frame):
+    ds = ObservationDataset(obs_frame, _small_tf(), {"sp_a": 0, "sp_b": 1, "sp_c": 2},
+                            genus_map={"G": 0}, max_photos=4, train=False)
+    assert len(ds) == 6
+    assert ds.n_truncated == 1
+    a, b = ds[0], ds[0]
+    assert a["n_images"] == 4 and a["image_paths"] == b["image_paths"]
+    assert [p.split("/")[-1] for p in a["image_paths"]] == [f"{i}-101.JPG" for i in range(4)]
+    assert a["genus_label"] == 0 and a["label"] == 0
+
+
+def test_observation_dataset_train_draws_varying_subsets(obs_frame):
+    ds = ObservationDataset(obs_frame, _small_tf(), {"sp_a": 0}, max_photos=4, train=True, seed=0)
+    sizes = {len(ds.photo_rows(0)) for _ in range(60)}
+    assert sizes == {1, 2, 3, 4}
+    orders = {tuple(ds.photo_rows(2)) for _ in range(40)}
+    assert len(orders) > 2  # 2 photos: subsets and orders vary
+    for _ in range(20):
+        rows = ds.photo_rows(0)
+        assert len(set(rows)) == len(rows)  # no repeats
+
+
+def test_collate_observations_full_contract(obs_frame):
+    ds = ObservationDataset(obs_frame, _small_tf(), {"sp_a": 0, "sp_b": 1}, genus_map={"G": 0},
+                            max_photos=4)
+    batch = collate_observations([ds[0], ds[1], ds[2]])
+    assert batch["images"].shape == (3, 4, 3, 32, 32)
+    assert batch["image_mask"].sum(1).tolist() == [4, 1, 2]
+    assert batch["n_images"].tolist() == [4, 1, 2]
+    assert torch.all(batch["images"][1, 1:] == 0)  # padding is exactly zero
+    assert batch["genus_label"].tolist() == [0, 0, 0]
+    assert len(batch["image_paths"][0]) == 4
+    assert batch["revisited_site"].dtype == torch.bool
+
+
+def test_observation_sampler_matches_image_sampler_class_share(obs_frame):
+    ds = ObservationDataset(obs_frame, _small_tf(), max_photos=4, train=True)
+    for mode in ("observation", "sqrt", "balanced"):
+        obs_level = build_observation_sampler(ds, mode, seed=0).expected_class_share()
+        img_level = ObservationSampler(obs_frame["observation_id"].to_numpy(),
+                                       obs_frame["species"].to_numpy(),
+                                       alpha={"observation": 0, "sqrt": .5, "balanced": 1}[mode]
+                                       ).expected_class_share()
+        for k in img_level:
+            assert obs_level[k] == pytest.approx(img_level[k])
+    s = build_observation_sampler(ds, "sqrt", seed=0)
+    idx = list(iter(s))
+    assert len(idx) == len(ds) and all(0 <= i < len(ds) for i in idx)
+    assert build_observation_sampler(ds, "none") is None
+
+
+def test_brightness_contrast_aug_keeps_hue(sample_image):
+    t = build_train_transform(64, crop_scale_min=0.5, color_aug="brightness_contrast")
+    assert not any("saturation" in repr(s) and "hue=(-0.05" in repr(s) for s in t.transforms)
+    jitter = [s for s in t.transforms if type(s).__name__ == "ColorJitter"][0]
+    assert jitter.hue is None and jitter.saturation is None
+    assert t(sample_image).shape == (3, 64, 64)
+    with pytest.raises(ValueError):
+        build_train_transform(64, color_aug="hue")
+
+
+def test_backbone_normalization_from_timm():
+    assert backbone_normalization("vit_base_patch16_224") == ((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+    mean, _ = backbone_normalization("vit_small_patch16_dinov3.lvd1689m")
+    assert mean == pytest.approx((0.485, 0.456, 0.406))
+    assert backbone_normalization("not_a_model")[0] == pytest.approx((0.485, 0.456, 0.406))

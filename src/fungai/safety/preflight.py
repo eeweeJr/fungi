@@ -23,11 +23,18 @@ def run_preflight(
     optimizer: torch.optim.Optimizer,
     criterion: torch.nn.Module,
     device: torch.device,
+    memory_estimate: dict | None = None,
+    step_fn=None,
+    steps_per_epoch: int | None = None,
 ) -> MemoryWatchdog:
     """Run all pre-flight checks, print report, start watchdog.
 
     Returns the active MemoryWatchdog (caller must .stop() it after training).
     Calls sys.exit(1) if estimated memory exceeds the configured limit.
+
+    memory_estimate: a dict shaped like `estimate_model_memory_mb`'s result, for
+    models that function cannot build (it measures a FungiClassifier). step_fn:
+    see `estimate_training_time`.
     """
     _p = lambda *a, **kw: print(*a, **kw, flush=True)
     _p("\n" + "=" * 70)
@@ -53,7 +60,7 @@ def run_preflight(
 
     # --- Memory Estimation ---
     _p("\n--- Memory Estimation ---")
-    mem = estimate_model_memory_mb(
+    mem = memory_estimate or estimate_model_memory_mb(
         config.model.backbone,
         config.data.image_size,
         config.data.batch_size,
@@ -84,7 +91,8 @@ def run_preflight(
     # --- Time Estimation ---
     _p("\n--- Time Estimation ---")
     time_est = estimate_training_time(
-        model, train_loader, optimizer, criterion, device, config.training.epochs
+        model, train_loader, optimizer, criterion, device, config.training.epochs,
+        step_fn=step_fn, steps_per_epoch=steps_per_epoch,
     )
     _p(f"  Batch time:      {time_est['batch_time_s']:>8.3f} s")
     _p(f"  Epoch time:      {time_est['epoch_time_s']:>8.1f} s  ({time_est['epoch_time_s']/60:.1f} min)")
@@ -100,7 +108,7 @@ def run_preflight(
     watchdog.start()
     _p(
         f"  Watchdog ACTIVE (limit={config.safety.memory_limit_gb}GB, "
-        f"poll={config.safety.memory_poll_interval_s}s)"
+        f"poll={config.safety.memory_poll_interval_s}s, counts process + GPU memory)"
     )
 
     _p("\n" + "=" * 70)

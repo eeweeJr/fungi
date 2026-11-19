@@ -126,3 +126,83 @@ def open_set_metrics(
         "known_retained": float((known >= threshold).mean()),
         "unknown_false_acceptance_rate": float((unknown >= threshold).mean()),
     }
+
+
+def _fit_temperature(logits, labels, logp_fn, max_iter: int = 100) -> float:
+    """Temperature minimising mean NLL of logp_fn(logits / T) on labels. Never returns
+    a temperature that is worse than T = 1."""
+    import torch
+
+    logits = torch.as_tensor(logits, dtype=torch.float64)
+    labels = torch.as_tensor(labels, dtype=torch.long)
+    if len(labels) == 0:
+        return 1.0
+
+    def nll(t):
+        return torch.nn.functional.nll_loss(logp_fn(logits / t), labels)
+
+    log_t = torch.zeros(1, dtype=torch.float64, requires_grad=True)
+    opt = torch.optim.LBFGS([log_t], lr=0.1, max_iter=max_iter, line_search_fn="strong_wolfe")
+
+    def closure():
+        opt.zero_grad()
+        loss = nll(log_t.exp())
+        loss.backward()
+        return loss
+
+    opt.step(closure)
+    t = float(log_t.detach().exp().clamp(0.05, 20.0))
+    with torch.no_grad():
+        if not np.isfinite(t) or nll(torch.tensor(t)) > nll(torch.tensor(1.0)):
+            return 1.0
+    return t
+
+
+def fit_temperatures(genus_logits, species_logits, genus_labels, labels, species_genus,
+                     n_genus: int, head: str = "hierarchical") -> dict:
+    """Temperatures fitted on validation observations by minimising NLL.
+
+    hierarchical: t_genus on p(genus) over all observations with a genus label, and
+    t_species on p(species | genus) over known-species observations. The two are
+    independent because log p(species) = log p(genus) + log p(species | genus).
+    flat: one t_species on the species softmax; t_genus = 1.
+    """
+    import torch
+
+    from fungai.model.hierarchy import membership
+
+    sg = torch.as_tensor(species_genus, dtype=torch.long)
+    labels, genus_labels = np.asarray(labels), np.asarray(genus_labels)
+    known = labels >= 0
+    if head == "flat":
+        t_s = _fit_temperature(np.asarray(species_logits)[known], labels[known],
+                               lambda x: x.log_softmax(-1))
+        return {"t_genus": 1.0, "t_species": t_s}
+    g_ok = genus_labels >= 0
+    t_g = _fit_temperature(np.asarray(genus_logits)[g_ok], genus_labels[g_ok],
+                           lambda x: x.log_softmax(-1))
+    member = membership(sg, n_genus)
+
+    def cond_logp(x):
+        masked = x.unsqueeze(1).masked_fill(~member.unsqueeze(0), float("-inf"))
+        return x - torch.logsumexp(masked, dim=-1)[:, sg]
+
+    t_s = _fit_temperature(np.asarray(species_logits)[known], labels[known], cond_logp)
+    return {"t_genus": t_g, "t_species": t_s}
+
+
+def apply_temperatures(genus_logits, species_logits, species_genus, n_genus: int,
+                       t_genus: float, t_species: float, head: str = "hierarchical"):
+    """(species_probs, genus_probs) as numpy after temperature scaling."""
+    import torch
+
+    from fungai.model.hierarchy import flat_logp, hierarchical_logp
+
+    g = torch.as_tensor(np.asarray(genus_logits), dtype=torch.float64)
+    s = torch.as_tensor(np.asarray(species_logits), dtype=torch.float64)
+    sg = torch.as_tensor(species_genus, dtype=torch.long)
+    if head == "flat":
+        out = flat_logp(s, sg, n_genus, t_species=t_species)
+    else:
+        out = hierarchical_logp(g, s, sg, n_genus, t_genus=t_genus, t_species=t_species)
+    return out["species_logp"].exp().numpy(), out["genus_logp"].exp().numpy()

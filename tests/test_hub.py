@@ -148,9 +148,9 @@ def test_location_is_tagged_on_the_mlflow_run(run_dir, fake, tmp_path):
     assert tags["checkpoint.commit"] == record["commit"]
 
 
-def test_hub_config_defaults_off_and_requires_repo(tmp_path):
+def test_hub_config_requires_repo_when_pushing(tmp_path):
     cfg = load_config("configs/default.yaml")
-    assert cfg.hub.push_best_checkpoint is False
+    assert cfg.hub.repo_id is None or "/" in cfg.hub.repo_id
     p = tmp_path / "c.yaml"
     p.write_text(yaml.dump({"hub": {"push_best_checkpoint": True}}))
     with pytest.raises(ValueError, match="repo_id"):

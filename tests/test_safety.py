@@ -8,7 +8,11 @@ import torch
 from torch import nn
 
 from fungai.config import ExperimentConfig, SafetyConfig
-from fungai.safety.estimator import _format_duration, estimate_model_memory_mb, estimate_training_time
+from fungai.safety.estimator import (
+    _format_duration,
+    estimate_model_memory_mb,
+    estimate_training_time,
+)
 from fungai.safety.watchdog import MemoryWatchdog
 
 
@@ -30,6 +34,36 @@ def test_watchdog_tracks_peak():
 def test_watchdog_current_gb():
     wd = MemoryWatchdog(limit_gb=64.0)
     assert wd.current_gb > 0
+
+
+def test_watchdog_counts_gpu_memory():
+    """Regression: MPS memory is invisible to RSS, so the limit was not enforced for
+    GPU training (10.8 GB on MPS read as 1.55 GB)."""
+    wd = MemoryWatchdog(limit_gb=64.0)
+    gpu = 5 * 1024**3
+    with patch.object(MemoryWatchdog, "_get_gpu_bytes", return_value=gpu):
+        rss, got = wd.sample()
+        assert got == gpu
+        assert wd.peak_gb == pytest.approx((rss + gpu) / 1024**3)
+        assert wd.peak_gpu_gb == pytest.approx(5.0)
+        assert wd.current_gb >= 5.0
+        assert "GPU 5.00 GB" in wd.summary()
+
+
+def test_watchdog_kills_when_gpu_pushes_total_over_limit():
+    rss_only = MemoryWatchdog(limit_gb=64.0)._get_total_rss()
+    wd = MemoryWatchdog(limit_gb=(rss_only + 1024**3) / 1024**3, poll_interval_s=0.05)
+    with patch.object(MemoryWatchdog, "_get_gpu_bytes", return_value=4 * 1024**3), \
+            patch("fungai.safety.watchdog.os.kill") as kill:
+        wd.start()
+        time.sleep(0.3)
+        wd.stop()
+    assert kill.called
+
+
+def test_gpu_memory_bytes_is_safe_without_gpu():
+    from fungai.safety.watchdog import gpu_memory_bytes
+    assert gpu_memory_bytes() >= 0
 
 
 def test_memory_estimation_keys():
